@@ -3,8 +3,11 @@ Random game picker from your installed Steam games. Mainly to help indecisive pe
 
 # Installation
 `pip install vdf`
+
 `pip install Pillow`
+
 `pip install requests`
+
 `pip install steam`
 
 You can run the script as it is through CMD, or you can compile it to an EXE with pyinstaller.
