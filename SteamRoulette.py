@@ -19,7 +19,7 @@ STEAM_PATH = os.path.expanduser(r"C:\Program Files (x86)\Steam")
 LIBRARY_FOLDERS_FILE = os.path.join(STEAM_PATH, "steamapps", "libraryfolders.vdf")
 client = SteamClient()
 EXCLUDED_APP_IDS = {228980, 250820, 365670}  # Steamworks, SteamVR, Blender (example IDs)
-EXCLUDED_KEYWORDS = ["redistributable", "steam vr", "blender", "tool"]
+EXCLUDED_KEYWORDS = ["redistributable", "steamvr", "blender", "tool"]
 
 # Function Definitions (Ensure these are defined above usage in your code)
 
