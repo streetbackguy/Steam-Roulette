@@ -31,4 +31,4 @@ To get your Steam API Key, visit https://steamcommunity.com/dev/apikey and login
 - If you're not particularly happy with one game, you can reroll with the reroll button.
 
 # To-Do
-- Add custom window and taskbar icons
+- Nothing else so far
