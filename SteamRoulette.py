@@ -172,10 +172,11 @@ def scan_steam_libraries(steamapps_path):
         acf_files = [f for f in os.listdir(steamapps_path) if f.endswith(".acf")]
         for acf in acf_files:
             acf_path = os.path.join(steamapps_path, acf)
-            game_data = parse_acf(acf_path)  # Ensure parse_acf() is defined as well
+            game_data = parse_acf(acf_path)
 
             # Check if the game is valid and not excluded
             if game_data and not is_excluded(game_data):
+                game_data["path"] = steamapps_path  # Include the path for drive grouping
                 installed_games.append(game_data)
 
     except Exception as e:
@@ -500,16 +501,16 @@ class SteamRouletteGUI:
         self.steam_path = steam_path
         self.api_key = self.load_api_key()  # Load the API key if available
 
-        # Handle icon path for PyInstaller bundle
-        if hasattr(sys, '_MEIPASS'):  # Running from PyInstaller bundle
+        # Use resource_path for bundled paths
+        if hasattr(sys, '_MEIPASS'):  # PyInstaller temp folder
             icon_path = os.path.join(sys._MEIPASS, 'SteamRouletteIcon.ico')
 
         print(f"Using icon at: {icon_path}")  # Debug print
 
         try:
-            # Set the window icon (taskbar and window)
-            self.root.iconbitmap(icon_path)  # Set taskbar and window icon
-            self.root.iconphoto(True, tk.PhotoImage(file=icon_path))  # Ensure taskbar icon is set too
+            # Set the window and taskbar icon
+            self.root.iconbitmap(icon_path)  # Set .ico for the window
+            self.root.iconphoto(True, tk.PhotoImage(file=icon_path))  # Set taskbar icon
         except Exception as e:
             print(f"Error setting window icon: {e}")
 
@@ -533,8 +534,11 @@ class SteamRouletteGUI:
         except Exception as e:
             print(f"Error loading logo image: {e}")
 
-        self.label_game_name = tk.Label(root, text="Welcome to Steam Roulette!", font=("Arial", 16))
-        self.label_game_name.pack(pady=10)
+        # Create the mapping of drives to game counts
+        self.games_per_drive = self.group_games_by_drive(installed_games)
+
+        self.label_game_name = tk.Label(root, text="Welcome to Steam Roulette!\n Click the button below to start spinning!", font=("Arial", 16))
+        self.label_game_name.pack(pady=0)
 
         self.label_image = tk.Label(root)
         self.label_image.pack(pady=10)
@@ -552,8 +556,9 @@ class SteamRouletteGUI:
         frame_bottom = tk.Frame(root)
         frame_bottom.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
 
-        # Add "Games Found" label to bottom right
-        self.label_game_count = tk.Label(frame_bottom, text=f"Games Found: {len(installed_games)}", font=("Arial", 10))
+        # Update the "Games Found" label
+        games_found_text = self.generate_games_found_text()
+        self.label_game_count = tk.Label(frame_bottom, text=games_found_text, font=("Arial", 10))
         self.label_game_count.pack(side=tk.RIGHT, padx=10)
 
         # Add "Set API Key" button to bottom left
@@ -564,6 +569,28 @@ class SteamRouletteGUI:
         self.spin_effect_active = False
         self.final_game_name = None
         self.final_app_id = None
+
+    def group_games_by_drive(self, games):
+        """Group installed games by their drive."""
+        games_per_drive = {}
+        for game in games:
+            game_path = game.get("path", "")
+            print(f"Processing game path: {game_path}")  # Debugging line
+            drive = os.path.splitdrive(game_path)[0]  # Extract the drive letter
+            if drive:
+                if drive not in games_per_drive:
+                    games_per_drive[drive] = 0
+                games_per_drive[drive] += 1
+        return games_per_drive
+
+    def generate_games_found_text(self):
+        """Generate a summary of games found on each drive."""
+        if not self.games_per_drive:
+            return "Games Found:\nNo games detected."
+        lines = ["Games Found:"]
+        for drive, count in self.games_per_drive.items():
+            lines.append(f"{drive} {count} games")
+        return "\n".join(lines)
 
     def load_logo_image(self, image_path):
         """Load the logo image without resizing."""
@@ -662,7 +689,7 @@ class SteamRouletteGUI:
 
         # Continue the cycle every 100 milliseconds
         if self.spin_effect_active:
-            self.root.after(100, self.cycle_game_names_and_images)
+            self.root.after(50, self.cycle_game_names_and_images)
 
     def show_selected_game(self):
         """Show the selected game after the spin stops."""
@@ -767,7 +794,7 @@ def main():
         root = tk.Tk()
         app = SteamRouletteGUI(root, all_installed_games, STEAM_PATH, icon_path)
         root.title("Steam Roulette")
-        root.geometry("600x750")
+        root.geometry("600x800")
         root.resizable(False, False)
         root.mainloop()
     else:
