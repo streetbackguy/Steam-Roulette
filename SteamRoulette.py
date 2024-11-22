@@ -21,8 +21,6 @@ client = SteamClient()
 EXCLUDED_APP_IDS = {228980, 250820, 365670}
 EXCLUDED_KEYWORDS = ["redistributable", "steamvr", "blender", "tool", "wallpaper engine"]
 
-icon = Image.open("SteamRouletteIcon.png")
-
 # Function Definitions (Ensure these are defined above usage in your code)
 
 # Function to get all drives (works for Windows, Linux, macOS)
@@ -771,7 +769,6 @@ def main():
         root.title("Steam Roulette")
         root.geometry("600x750")
         root.resizable(False, False)
-        root.iconbitmap(icon)
         root.mainloop()
     else:
         print("No installed games found.")
