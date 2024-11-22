@@ -29,4 +29,4 @@ To get your Steam API Key, visit https://steamcommunity.com/dev/apikey and login
 - If you're not particularly happy with one game, you can reroll with the reroll button.
 
 # To-Do
-- Make it so that the Spin Wheel button isn't clickable after the initial click
+- Add custom window and taskbar icons
