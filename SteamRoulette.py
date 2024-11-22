@@ -1,6 +1,7 @@
 import os
 import sys;
 import random
+import time
 import platform
 import webbrowser
 import subprocess
@@ -497,7 +498,7 @@ class SteamRouletteGUI:
         self.root = root
         self.installed_games = installed_games
         self.steam_path = steam_path
-        self.api_key = self.load_api_key()
+        self.api_key = self.load_api_key()  # Load the API key if available
 
         # Use resource_path to get the correct image path
         logo_path = resource_path("SteamRouletteLogo.png")
@@ -519,7 +520,9 @@ class SteamRouletteGUI:
         except Exception as e:
             print(f"Error loading logo image: {e}")
 
-        # Continue setting up the GUI
+        self.label_game_name = tk.Label(root, text="Welcome to Steam Roulette!", font=("Arial", 16))
+        self.label_game_name.pack(pady=10)
+
         self.label_image = tk.Label(root)
         self.label_image.pack(pady=10)
 
@@ -532,9 +535,6 @@ class SteamRouletteGUI:
         self.button_store = tk.Button(root, text="Go to Steam Store", command=self.go_to_store, state=tk.DISABLED, font=("Arial", 12))
         self.button_store.pack(pady=5)
 
-        self.button_reroll = tk.Button(root, text="Reroll", command=self.spin_wheel, state=tk.DISABLED, font=("Arial", 12))
-        self.button_reroll.pack(pady=5)
-
         # Bottom frame for alignment
         frame_bottom = tk.Frame(root)
         frame_bottom.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
@@ -546,6 +546,11 @@ class SteamRouletteGUI:
         # Add "Set API Key" button to bottom left
         self.button_set_api_key = tk.Button(frame_bottom, text="Set API Key", command=self.set_api_key, font=("Arial", 12))
         self.button_set_api_key.pack(side=tk.LEFT, padx=10)
+
+        # Control flags
+        self.spin_effect_active = False
+        self.final_game_name = None
+        self.final_app_id = None
 
     def load_logo_image(self, image_path):
         """Load the logo image without resizing."""
@@ -606,30 +611,65 @@ class SteamRouletteGUI:
         game_title = self.selected_game["name"]
         app_id = self.selected_game["app_id"]
 
-        # Fetch or create the game image
-        game_image = get_fallback_image(game_title, app_id, self.steam_path)
+        # Disable the Spin button during the spin
+        self.button_spin.config(state=tk.DISABLED)
+        self.button_launch.config(state=tk.DISABLED)
+        self.button_store.config(state=tk.DISABLED)
 
-        # Display the game name and image
-        self.label_game_name.config(text=game_title)
+        # Initialize spin effect flags
+        self.final_game_name = game_title
+        self.final_app_id = app_id
+        self.spin_effect_active = True
+
+        # Start cycling through random games
+        self.cycle_game_names_and_images()
+
+        # After a short delay, stop the spinning and show the selected game
+        self.root.after(2000, self.show_selected_game)
+
+    def spin_game_names_and_images(self, final_game_name, final_app_id):
+        """Cycle through random game names and images to simulate spinning."""
+        # Run a random cycling effect for 2 seconds
+        self.cycle_game_names_and_images()
+
+        # Update the label every 100 milliseconds
+        self.spin_effect_active = True
+        self.cycle_game_names_and_images()
+        
+    def cycle_game_names_and_images(self):
+        """Cycle through the game names and images rapidly."""
+        if not self.spin_effect_active:
+            return
+
+        # Pick a random game from installed games to display
+        random_game = random.choice(self.installed_games)
+        random_game_name = random_game["name"]
+        random_app_id = random_game["app_id"]
+
+        # Display the random game name and image
+        self.label_game_name.config(text=random_game_name)
+        game_image = get_fallback_image(random_game_name, random_app_id, self.steam_path)
+        self.show_game_image(game_image)
+
+        # Continue the cycle every 100 milliseconds
+        if self.spin_effect_active:
+            self.root.after(100, self.cycle_game_names_and_images)
+
+    def show_selected_game(self):
+        """Show the selected game after the spin stops."""
+        self.label_game_name.config(text=self.final_game_name)
+        game_image = get_fallback_image(self.final_game_name, self.final_app_id, self.steam_path)
         self.show_game_image(game_image)
 
         # Enable the action buttons
         self.button_launch.config(state=tk.NORMAL)
         self.button_store.config(state=tk.NORMAL)
-        self.button_reroll.config(state=tk.NORMAL)
 
-        # Fetch or create the game image
-        game_image = get_fallback_image(game_title, app_id, self.steam_path)
+        # Re-enable the Spin button for the next round
+        self.button_spin.config(state=tk.NORMAL, text="Re-Roll")
 
-        # Display the game name and image
-        self.label_game_name.config(text=game_title)
-        self.show_game_image(game_image)
-
-        # Enable the action buttons
-        self.button_launch.config(state=tk.NORMAL)
-        self.button_store.config(state=tk.NORMAL)
-        self.button_reroll.config(state=tk.NORMAL)
-
+        # Stop the spin effect
+        self.spin_effect_active = False
 
     def show_game_image(self, image):
         """Display the game image or fallback text in the GUI."""
@@ -639,17 +679,26 @@ class SteamRouletteGUI:
         if isinstance(image, Image.Image):  # Check if it's a PIL Image object
             # Set a fixed width for the image (e.g., 600px)
             target_width = 600
-            aspect_ratio = image.width / image.height
+
+            # Get the original width and height of the image
+            original_width, original_height = image.size
+            aspect_ratio = original_width / original_height
+
+            # Calculate the new height to maintain the aspect ratio
             target_height = int(target_width / aspect_ratio)
 
+            # Resize the image to the target width and calculated height
             image = image.resize((target_width, target_height), Image.Resampling.LANCZOS)
-            img_tk = ImageTk.PhotoImage(image)
-            self.label_image.config(image=img_tk, text="")
-            self.label_image.image = img_tk
-        else:
-            # If no image is provided, show fallback text
-            self.label_image.config(image=None, text="Image Unavailable")
 
+            # Convert the image to a Tkinter-compatible format
+            img_tk = ImageTk.PhotoImage(image)
+
+            # Set the image to the label and keep a reference
+            self.label_image.config(image=img_tk, text="")  # Clear any previous text
+            self.label_image.image = img_tk  # Keep a reference to avoid garbage collection
+        else:
+            # If no image is provided, show fallback text instead
+            self.label_image.config(image=None, text="Image Unavailable")  # Show fallback text instead of an image)
 
     def launch_game(self):
         """Launch the selected game."""
