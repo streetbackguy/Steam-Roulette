@@ -18,8 +18,10 @@ from steam.client import SteamClient
 STEAM_PATH = os.path.expanduser(r"C:\Program Files (x86)\Steam")
 LIBRARY_FOLDERS_FILE = os.path.join(STEAM_PATH, "steamapps", "libraryfolders.vdf")
 client = SteamClient()
-EXCLUDED_APP_IDS = {228980, 250820, 365670}  # Steamworks, SteamVR, Blender (example IDs)
-EXCLUDED_KEYWORDS = ["redistributable", "steamvr", "blender", "tool"]
+EXCLUDED_APP_IDS = {228980, 250820, 365670}
+EXCLUDED_KEYWORDS = ["redistributable", "steamvr", "blender", "tool", "wallpaper engine"]
+
+icon = Image.open("SteamRouletteIcon.png")
 
 # Function Definitions (Ensure these are defined above usage in your code)
 
@@ -494,11 +496,24 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 class SteamRouletteGUI:
-    def __init__(self, root, installed_games, steam_path):
+    def __init__(self, root, installed_games, steam_path, icon_path):
         self.root = root
         self.installed_games = installed_games
         self.steam_path = steam_path
         self.api_key = self.load_api_key()  # Load the API key if available
+
+        # Handle icon path for PyInstaller bundle
+        if hasattr(sys, '_MEIPASS'):  # Running from PyInstaller bundle
+            icon_path = os.path.join(sys._MEIPASS, 'SteamRouletteIcon.ico')
+
+        print(f"Using icon at: {icon_path}")  # Debug print
+
+        try:
+            # Set the window icon (taskbar and window)
+            self.root.iconbitmap(icon_path)  # Set taskbar and window icon
+            self.root.iconphoto(True, tk.PhotoImage(file=icon_path))  # Ensure taskbar icon is set too
+        except Exception as e:
+            print(f"Error setting window icon: {e}")
 
         # Use resource_path to get the correct image path
         logo_path = resource_path("SteamRouletteLogo.png")
@@ -566,19 +581,15 @@ class SteamRouletteGUI:
 
     def load_api_key(self):
         """Load API key from the file in the same directory as the .exe."""
-        try:
-            # Get the path of the current working directory (where the .exe is located)
-            current_directory = os.path.dirname(os.path.abspath(__file__))
-            api_key_file_path = os.path.join(current_directory, 'apikey.txt')
+        # Get the path of the current working directory (where the .exe is located)
+        current_directory = os.path.dirname(os.path.abspath(__file__))
+        api_key_file_path = os.path.join(current_directory, 'apikey.txt')
 
-            if os.path.exists(api_key_file_path):
-                with open(api_key_file_path, 'r') as file:
-                    api_key = file.read().strip()
-                    print(f"API Key loaded: {api_key}")  # Debug: print loaded API key
-                    return api_key
-        except Exception as e:
-            print(f"Error loading API key: {e}")
-        return None  # If no key is found, return None
+        api_key_path = "apikey.txt"
+        if os.path.exists(api_key_path):
+            with open(api_key_path, "r") as file:
+                return file.read().strip()
+        return ""
 
     def set_api_key(self):
         """Prompt user for an API key and save it to a file in the current directory."""
@@ -716,6 +727,9 @@ def main():
     drives = get_drives()  # Get all available drives
     all_installed_games = []
 
+    # Path to the icon (same path as your script or the packaged file)
+    icon_path = r'SteamRouletteIcon.ico'  # Path to the .ico file
+
     # Check default Steam paths on each drive
     for drive in drives:
         possible_steam_paths = [
@@ -753,10 +767,11 @@ def main():
     if all_installed_games:
         # Initialize GUI with the list of installed games
         root = tk.Tk()
-        app = SteamRouletteGUI(root, all_installed_games, STEAM_PATH)
+        app = SteamRouletteGUI(root, all_installed_games, STEAM_PATH, icon_path)
         root.title("Steam Roulette")
         root.geometry("600x750")
         root.resizable(False, False)
+        root.iconbitmap(icon)
         root.mainloop()
     else:
         print("No installed games found.")
