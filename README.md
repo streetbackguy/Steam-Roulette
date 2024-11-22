@@ -24,6 +24,7 @@ To get your Steam API Key, visit https://steamcommunity.com/dev/apikey and login
 
 # Features
 - This application will launch the chosen game for you directly from the Steam client.
+- With each game chosen, it will display the Steam Header image for that game from the Steam servers. If no image is found on the server, it will look for a local Header file instead.
 - This application has a button that will bring you to the games Store Page on https://steampowered.com.
 - If you're not particularly happy with one game, you can reroll with the reroll button.
 
