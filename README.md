@@ -10,6 +10,8 @@ Random game picker from your installed Steam games. Mainly to help indecisive pe
 
 `pip install steam`
 
+`pip install tk`
+
 You can run the script as it is through CMD, or you can compile it to an EXE with pyinstaller.
 
 # Pyinstaller Compilation
