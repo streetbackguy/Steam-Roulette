@@ -17,7 +17,6 @@ from steam.client import SteamClient
 STEAM_PATH = os.path.expanduser(r"C:\Program Files (x86)\Steam")
 LIBRARY_FOLDERS_FILE = os.path.join(STEAM_PATH, "steamapps", "libraryfolders.vdf")
 client = SteamClient()
-API_KEY = "4C18D98E42599B8BD3702810ED07FE4A"
 EXCLUDED_APP_IDS = {228980, 250820, 365670}  # Steamworks, SteamVR, Blender (example IDs)
 EXCLUDED_KEYWORDS = ["redistributable", "steam vr", "blender", "tool"]
 
@@ -290,8 +289,6 @@ if installed_games:
 else:
     print("No games found in installed directories.")
 
-
-
 # Example usage
 steam_path = STEAM_PATH  # Adjust based on your Steam installation path
 installed_games = get_installed_games(steam_path)
@@ -310,7 +307,6 @@ def extract_app_id_from_manifest(manifest_path):
     except Exception as e:
         print(f"Error reading manifest {manifest_path}: {e}")
     return app_id
-
 
 def process_game(game):
     app_id = game.get('app_id')
@@ -564,37 +560,41 @@ class SteamRouletteGUI:
             return None
 
     def load_api_key(self):
-        """Load the API key from a file."""
+        """Load API key from the file in the same directory as the .exe."""
         try:
-            with open("apikey.txt", "r") as file:
-                api_key = file.read().strip()
-                print(f"Loaded API Key: {api_key}")
-                return api_key
-        except FileNotFoundError:
-            print("No API key file found.")
-            return None
+            # Get the path of the current working directory (where the .exe is located)
+            current_directory = os.path.dirname(os.path.abspath(__file__))
+            api_key_file_path = os.path.join(current_directory, 'apikey.txt')
 
-    def save_api_key(self, api_key):
-        """Save the API key to a file."""
-        try:
-            with open("apikey.txt", "w") as file:
-                file.write(api_key)
-                print("API key saved successfully.")
+            if os.path.exists(api_key_file_path):
+                with open(api_key_file_path, 'r') as file:
+                    api_key = file.read().strip()
+                    print(f"API Key loaded: {api_key}")  # Debug: print loaded API key
+                    return api_key
         except Exception as e:
-            print(f"Error saving API key: {e}")
+            print(f"Error loading API key: {e}")
+        return None  # If no key is found, return None
 
     def set_api_key(self):
-        """Open a dialog box to input the API key."""
-        api_key = simpledialog.askstring("Set API Key", "Enter your Steam Web API Key:")
+        """Prompt user for an API key and save it to a file in the current directory."""
+        def save_api_key(api_key):
+            try:
+                # Get the current working directory
+                current_directory = os.path.dirname(os.path.abspath(__file__))
+                api_key_file_path = os.path.join(current_directory, 'apikey.txt')
+
+                with open(api_key_file_path, 'w') as file:
+                    file.write(api_key)
+                    print(f"API Key saved to {api_key_file_path}")  # Debug: print save location
+                self.api_key = api_key  # Store the API key in the object
+                messagebox.showinfo("API Key", "API Key saved successfully.")
+            except Exception as e:
+                print(f"Error saving API key: {e}")
+
+        # Show dialog box to get API key from the user
+        api_key = simpledialog.askstring("Enter API Key", "Please enter your Steam API Key:")
         if api_key:
-            if len(api_key) == 32:  # Validate API key length
-                self.api_key = api_key
-                self.save_api_key(api_key)
-                messagebox.showinfo("Success", "API Key saved successfully!")
-            else:
-                messagebox.showwarning("Invalid Key", "The API Key you entered is invalid. Please try again.")
-        else:
-            messagebox.showinfo("No Key Entered", "No API Key was entered.")
+            save_api_key(api_key)  # Save the API key if provided
 
     def spin_wheel(self):
         """Pick a random game from the installed games and display it."""
