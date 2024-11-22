@@ -15,7 +15,7 @@ Random game picker from your installed Steam games. Mainly to help indecisive pe
 You can run the script as it is through CMD, or you can compile it to an EXE with pyinstaller.
 
 # Pyinstaller Compilation
-`pyinstaller --onefile --windowed --add-data "SteamRouletteLogo.png;." SteamRoulette.py`
+`pyinstaller --onefile --noconsole --icon=SteamRouletteIcon.ico --add-data "apikey.txt;." --add-data "SteamRouletteIcon.ico;." --add-data "SteamRouletteLogo.png;." SteamRoulette.py`
 
 # Usage
 To use this application, you will need your Steam API key. This cannot be provided and is different for each person.
