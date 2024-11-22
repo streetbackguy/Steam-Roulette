@@ -24,7 +24,7 @@ To get your Steam API Key, visit https://steamcommunity.com/dev/apikey and login
 
 # Features
 - This application will launch the chosen game for you directly from the Steam client.
-- This application has a button that will bring you to the games Store Page on steampowered.com.
+- This application has a button that will bring you to the games Store Page on https://steampowered.com.
 - If you're not particularly happy with one game, you can reroll with the reroll button.
 
 # To-Do
