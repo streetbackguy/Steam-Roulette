@@ -1,10 +1,8 @@
 import os
 import sys;
 import random
-import time
 import shutil
 import string
-import unicodedata
 import platform
 import webbrowser
 import subprocess
@@ -187,6 +185,15 @@ def scan_steam_libraries(steamapps_path):
     
     return installed_games
 
+def calculate_folder_size(folder_path):
+    """Calculate the total size of a folder and its subfolders."""
+    try:
+        total_size = shutil.disk_usage(folder_path).used  # Size in bytes
+        return total_size / (1024 * 1024 * 1024)  # Convert bytes to GB
+    except Exception as e:
+        print(f"Error calculating folder size for {folder_path}: {e}")
+        return None
+
 def get_steam_user_id(steam_path):
     """Extract the Steam User ID from loginusers.vdf."""
     # Correct path construction
@@ -231,9 +238,8 @@ steam_path = r"C:\Program Files (x86)\Steam"  # Modify if your Steam installatio
 get_steam_user_id(steam_path)
 
 
-# Function to get installed games from a specific Steam library path
 def get_installed_games(steam_path):
-    """Scan the Steam installation path for installed games."""
+    """Scan the Steam installation path for installed games and sizes."""
     library_folders_file = os.path.join(steam_path, "steamapps", "libraryfolders.vdf")
     if not os.path.exists(library_folders_file):
         print(f"Library folders file not found at {steam_path}.")
@@ -242,62 +248,35 @@ def get_installed_games(steam_path):
     installed_games = []
     try:
         libraries = parse_vdf(library_folders_file)
-        print(f"Libraries parsed: {libraries}")  # Debug: Print parsed library paths
+        print(f"Libraries parsed: {libraries}")
 
         # Scan each Steam library folder
-        for library_index, library_path in libraries.items():
-            if isinstance(library_path, str):  # Ensure it's a valid string path
-                steamapps_path = os.path.join(library_path, "steamapps")
-                if os.path.exists(steamapps_path):
-                    print(f"Scanning Steamapps folder: {steamapps_path}")
-                    installed_games.extend(scan_steam_libraries(steamapps_path))
-                else:
-                    print(f"Steamapps folder not found: {steamapps_path}")
-            else:
-                print(f"Invalid library path detected: {library_path}")
+        for library_path in libraries.values():
+            steamapps_path = os.path.join(library_path, "steamapps")
+            if os.path.exists(steamapps_path):
+                acf_files = [f for f in os.listdir(steamapps_path) if f.endswith(".acf")]
+                for acf_file in acf_files:
+                    acf_path = os.path.join(steamapps_path, acf_file)
+                    game_data = parse_acf(acf_path)
+
+                    if game_data:
+                        # Resolve the installation folder
+                        game_folder = os.path.join(library_path, "steamapps", "common", game_data["name"])
+                        game_data["path"] = game_folder
+                        
+                        # Calculate folder size if the folder exists
+                        if os.path.exists(game_folder):
+                            game_data["size"] = calculate_folder_size(game_folder)
+                        else:
+                            game_data["size"] = None
+
+                        installed_games.append(game_data)
 
     except Exception as e:
-        print(f"Error while processing Steam libraries at {steam_path}: {e}")
+        print(f"Error processing Steam libraries: {e}")
         return []
 
-    print(f"Installed games found in {steam_path}: {len(installed_games)}")
     return installed_games
-
-# Example Usage
-steam_path = STEAM_PATH  # Adjust for your Steam installation path
-user_id = get_steam_user_id(steam_path)
-if user_id:
-    print(f"Steam User ID: {user_id}")
-else:
-    print("Could not retrieve Steam User ID.")
-
-installed_games = get_installed_games(steam_path)
-print(f"Installed games found: {len(installed_games)}")
-
-# Example Usage
-steam_path = STEAM_PATH  # Adjust for your Steam installation path
-user_id = get_steam_user_id(steam_path)
-if user_id:
-    print(f"Steam User ID: {user_id}")
-else:
-    print("Could not retrieve Steam User ID.")
-
-installed_games = get_installed_games(steam_path)
-print(f"Installed games found: {len(installed_games)}")
-
-# Main flow
-all_installed_games = []
-installed_games = get_installed_games(steam_path)
-print(f"Installed games after gathering: {installed_games}")  # Check final list here
-if installed_games:
-    all_installed_games.extend(installed_games)
-else:
-    print("No games found in installed directories.")
-
-# Example usage
-steam_path = STEAM_PATH  # Adjust based on your Steam installation path
-installed_games = get_installed_games(steam_path)
-print(f"Installed games: {installed_games}")
 
 def extract_app_id_from_manifest(manifest_path):
     """Extract the app_id from the appmanifest file."""
@@ -505,6 +484,7 @@ class SteamRouletteGUI:
         self.api_key = self.load_api_key()  # Load the API key if available
         self.selected_game = None
         self.game_size = 0
+        self.filtered_games = []
 
         # Use resource_path for bundled paths
         if hasattr(sys, '_MEIPASS'):  # PyInstaller temp folder
@@ -549,8 +529,12 @@ class SteamRouletteGUI:
         self.label_game_size = tk.Label(root, text="", font=("Arial", 10))
         self.label_game_size.pack(pady=5)
 
-        self.label_image = tk.Label(root)
-        self.label_image.pack(pady=10)
+        self.canvas = tk.Canvas(root, width=600, height=280, bg="black")
+        self.canvas.pack(pady=10)
+
+        # Add an image item to the canvas (placeholder, updated dynamically)
+        self.image_item = None
+        self.active_images = []  # Stores tuples of (canvas_item, x_position)
 
         self.button_spin = tk.Button(root, text="Spin the Wheel", command=self.spin_wheel, font=("Arial", 14))
         self.button_spin.pack(pady=10)
@@ -578,6 +562,12 @@ class SteamRouletteGUI:
         self.spin_effect_active = False
         self.final_game_name = None
         self.final_app_id = None
+
+        # Call this method once at the start to preload the images
+        self.preload_images()
+
+        # Initialize the class
+        self.animation_id = None  # To store the scheduled animation ID
 
     def get_drives(self):
         """Return a list of available drives."""
@@ -655,304 +645,209 @@ class SteamRouletteGUI:
         if api_key:
             save_api_key(api_key)  # Save the API key if provided
 
-    def get_steam_library_paths(self, steam_config_path="C:\\Program Files (x86)\\Steam\\config\\libraryfolders.vdf"):
-        """Get all the Steam library paths from the libraryfolders.vdf file."""
-        library_paths = []
-        
-        if os.path.exists(steam_config_path):
-            try:
-                with open(steam_config_path, "rb") as f:
-                    vdf_data = f.read()
-                
-                # Attempt to decode the file with UTF-8, if it fails, try ISO-8859-1
-                try:
-                    vdf_data = vdf_data.decode("utf-8")
-                except UnicodeDecodeError:
-                    vdf_data = vdf_data.decode("ISO-8859-1")
-                
-                lines = vdf_data.splitlines()
-                for line in lines:
-                    if '"path"' in line:
-                        path = line.split('"')[3]
-                        if os.path.exists(path):
-                            library_paths.append(path)
-            except Exception as e:
-                print(f"Error reading libraryfolders.vdf: {e}")
-        
-        return library_paths
-
-    def find_game_folder_using_app_id(self, app_id, steam_path="C:\\Program Files (x86)\\Steam"):
-        """Automatically find the game folder using app_id and Steam's library structure."""
-        library_paths = self.get_steam_library_paths(os.path.join(steam_path, "config", "libraryfolders.vdf"))
-        
-        for library in library_paths:
-            game_folder = os.path.join(library, "steamapps", "common", str(app_id))
-            if os.path.exists(game_folder):
-                print(f"Game folder for app_id {app_id} found at: {game_folder}")
-                return game_folder
-        
-        print(f"Game folder for app_id {app_id} not found.")
-        return None
-
-    def normalize_name(self, name, keep_apostrophes=False):
-        """
-        Normalize a game name by handling spaces, hyphens, colons, special characters, and accented characters.
-        
-        Parameters:
-        - name (str): The game name to normalize.
-        - keep_apostrophes (bool): Whether to retain apostrophes in the normalized name.
-        """
-        # Normalize Unicode characters and convert to ASCII
-        normalized_name = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('ASCII')
-        
-        # Make everything lowercase
-        normalized_name = normalized_name.lower()
-        
-        # Remove common redundant words often appended to game titles
-        redundant_words = ["ultimate", "edition", "definitive", "remastered", "deluxe", "sith", "game of the year"]
-        for word in redundant_words:
-            normalized_name = normalized_name.replace(word, "")
-        
-        # Replace spaces, hyphens, colons, and other special characters
-        normalized_name = normalized_name.replace(" ", "_") \
-            .replace("-", "_") \
-            .replace(":", "") \
-            .replace(".", "") \
-            .replace("™", "") \
-            .replace("®", "") \
-            .replace(",", "_") \
-            .replace("(", "") \
-            .replace(")", "") \
-            .replace("*", "")
-        
-        # Handle "vs." and "vs" consistently
-        normalized_name = normalized_name.replace("_vs_", "_vs_")
-        
-        # Handle apostrophes based on the `keep_apostrophes` parameter
-        if not keep_apostrophes:
-            normalized_name = normalized_name.replace("'", "")
-        
-        # Fix specific cases for common words
-        normalized_name = normalized_name.replace("_the_", "_")  # Collapse "the"
-        normalized_name = normalized_name.replace("_of_", "_")  # Collapse "of"
-        
-        return normalized_name
-
-    def generate_acronym(self, game_title):
-        """Generate possible acronyms or simplified forms for a game title."""
-        # Split the game title into words, keeping only significant parts
-        words = game_title.split()
-
-        acronym_variants = []
-
-        # Generate acronym based on the first letter of each significant word
-        acronym = "".join([word[0].upper() for word in words if word.isalpha()])
-        acronym_variants.append(acronym)
-
-        # Check if there is a version number in the title (e.g., "1", "2", "V1", "V2")
-        version_match = re.search(r'\d+', game_title)  # Find any digits
-        if version_match:
-            # Append the version number to the acronym (e.g., MGS1, Crash4)
-            version = version_match.group(0)
-            acronym_variants.append(acronym + version)
-
-        # If the title contains a colon, we could split and use the first part
-        if ":" in game_title:
-            primary_keywords = game_title.split(":")[0].strip().split()
-            acronym_variants.append("".join([word[0].upper() for word in primary_keywords if word.isalpha()]))
-
-        # Handle titles with keywords like "Vengeance" or custom cases
-        if "vengeance" in game_title.lower():
-            acronym_variants.append("".join([word[0].upper() for word in words[:3]]) + "V")
-
-        # Ensure unique variants
-        return list(set(acronym_variants))
-
-    def simplify_game_title(self, game_title):
-        """Simplifies game titles to a commonly recognized name format for folder matching."""
-        # Define some commonly known cases that can be simplified (Replace with your own if you experience issues finding a game folder that is very different)
-        simplifications = {
-            "crayola scoot": "scoot",
-            "metal gear solid - master collection version": "mgs1",
-            "hitman: world of assassination": "hitman 3",
-            "while true: learn()": "wtl",
-            "shin megami tensei v: vengeance": "smt5v",
-            "misao - 2024 hd remaster": "misao",
-            "psycho-pass: mandatory happiness": "psycho-pass mandatory happiness steam",
-            "gal*gun: double peace": "galgun double peace",
-            "south park: snow day!": "southparksnowday",
-            "persona 3 reload": "p3r",
-        }
-
-        # Lowercase the title for easy matching
-        game_title_lower = game_title.lower()
-
-        # Check if the title matches any simplifications and return the simplified version
-        for key, value in simplifications.items():
-            if key in game_title_lower:
-                return value
-
-        # If no simplification applies, return the game title as is
-        return game_title
-
-    def search_folder_by_title(self, game_title, base_path):
-        """Search for folder names that match the significant parts of the game title or acronyms."""
-        game_folders = os.listdir(os.path.join(base_path, "common"))
-        matching_folders = []
-
-        print(f"Searching for matching folders for '{game_title}'...")  # Debug log for folder matching
-
-        # Normalize the game title
-        normalized_title = self.normalize_name(game_title)
-
-        # First, check if we have a well-known part that could simplify the title (e.g., "Crayola Scoot" -> "Scoot")
-        simplified_title = self.simplify_game_title(game_title)
-
-        # Extract primary keywords (First 3 significant words and keep numbers intact)
-        primary_keywords = simplified_title.split(":")[0].strip().split()[:3]  # First 3 significant words
-        primary_keywords = [word for word in primary_keywords if word.isalnum()]  # Keep alphanumeric words
-
-        print(f"Normalized simplified game title for matching: '{simplified_title}'")
-
-        # First, look for an exact match based on the simplified game title
-        for folder in game_folders:
-            folder_normalized = self.normalize_name(folder)
-            print(f"Checking folder: {folder} (normalized: {folder_normalized})")
-            if simplified_title.lower() == folder_normalized.lower():
-                matching_folders.append(folder)
-
-        # If no exact match, try matching significant keywords
-        if not matching_folders:
-            for folder in game_folders:
-                if all(keyword.lower() in folder.lower() for keyword in primary_keywords):
-                    matching_folders.append(folder)
-
-        # If still no matches, try acronym matches
-        if not matching_folders:
-            acronym_variants = self.generate_acronym(game_title)
-            print(f"Trying acronyms for matching folder...")  # Debug log for acronym matching
-            for folder in game_folders:
-                for acronym in acronym_variants:
-                    if acronym.lower() in folder.lower():
-                        matching_folders.append(folder)
-
-        print(f"Matching folders for '{game_title}': {matching_folders}")  # Debug log for folder matching
-        return matching_folders
-
-    def calculate_game_size(self, game_path):
-        """Calculate the total size of all files in the game folder using disk usage."""
-        if not os.path.exists(game_path):
-            print(f"Game path does not exist: {game_path}")
-            return 0  # Return 0 if the path is invalid
-
-        try:
-            total_size = 0
-            # Walk through the folder recursively and add the size of all files
-            for dirpath, dirnames, filenames in os.walk(game_path):
-                for filename in filenames:
-                    file_path = os.path.join(dirpath, filename)
-                    
-                    # Skip symlinks
-                    if os.path.islink(file_path):
-                        continue
-                    
-                    # Add file size if it's a regular file
-                    if os.path.isfile(file_path):
-                        total_size += os.path.getsize(file_path)
-            
-            total_size_gb = total_size / (1024 * 1024 * 1024)  # Convert bytes to GB
-            print(f"Total size of '{game_path}': {total_size_gb:.2f} GB")
-            return total_size_gb
-
-        except Exception as e:
-            print(f"Error calculating game size for {game_path}: {e}")
-            return 0
-
     def spin_wheel(self):
         """Start the spinning animation and pick a random game."""
+        
+        # Clear the label when the button is clicked
+        self.label_game_name.config(text="")  # Set the label text to an empty string
+
         if not self.installed_games:
             messagebox.showinfo("Error", "No games found.")
             return
 
+        # Randomly select the final game
         self.selected_game = random.choice(self.installed_games)
-        game_title = self.selected_game["name"]
-        app_id = self.selected_game["app_id"]
-        game_path = os.path.join(self.selected_game["path"], "common", game_title)
-        base_path = self.selected_game.get("path", steam_path)
-
-        # Search for the folder that matches the game title
-        matching_folders = self.search_folder_by_title(game_title, base_path)
-
-        if not matching_folders:
-            print(f"Unable to resolve game path for {game_title}")
-            return
-
-        # For simplicity, we take the first match
-        game_path = os.path.join(base_path, "common", matching_folders[0])
-        print(f"Found game folder: {game_path}")
-
-        # Recalculate the total game size (including all files in subfolders)
-        self.game_size = self.calculate_game_size(game_path)
-        print(f"Total game size for '{game_title}': {self.game_size:.2f} GB")
+        self.final_game_name = self.selected_game["name"]
+        self.final_app_id = self.selected_game["app_id"]
 
         # Disable buttons during the spin
         self.button_spin.config(state=tk.DISABLED)
         self.button_launch.config(state=tk.DISABLED)
         self.button_store.config(state=tk.DISABLED)
 
-        # Initialize spinning
-        self.final_game_name = game_title
-        self.final_app_id = app_id
+        # Start spinning animation
         self.spin_effect_active = True
+        self.cycle_game_names_and_images(speed=50)  # Start cycling images
 
-        # Start animation
-        self.cycle_game_names_and_images(speed=50)
+        # Stop spinning after the animation is done (example time 10 seconds)
+        self.root.after(10000, self.show_selected_game)  # Adjust time as needed (e.g., 10 seconds)
 
-        # Stop spinning after 2 seconds and show the result
-        self.root.after(2000, self.show_selected_game)
+    def slide_images(self, speed=10, slowdown_start_index=5):
+        """Slide all active images across the canvas."""
+        canvas_width = self.canvas.winfo_width()  # Get the actual canvas width
+        images_to_remove = []
 
-        # Start animation
-        self.cycle_game_names_and_images(speed=50)
+        # Track if the selected game image has reached the center
+        selected_image_reached_center = False
 
-        # Stop spinning after 2 seconds and show the result
-        self.root.after(2000, self.show_selected_game)
+        # Track if all images have moved off-screen
+        non_selected_images_offscreen = True
 
-    def spin_game_names_and_images(self, final_game_name, final_app_id):
-        """Cycle through random game names and images to simulate spinning."""
-        # Run a random cycling effect for 2 seconds
-        self.cycle_game_names_and_images()
+        # Calculate the position of the selected game (center of canvas)
+        selected_game_position = canvas_width // 2
 
-        # Update the label every 100 milliseconds
-        self.spin_effect_active = True
-        self.cycle_game_names_and_images()
+        # Loop over each image in the active images list
+        for index, (image_item, img_tk) in enumerate(self.active_images):  # Unpack active images
+            app_id = img_tk  # Assuming `img_tk` contains the app_id (can change depending on your data structure)
+            
+            # Get the current position of the image
+            coords = self.canvas.coords(image_item)
+
+            # Calculate the distance of the current image from the selected game position
+            distance_from_selected_game = abs(coords[0] - selected_game_position)
+
+            # Slow down the animation only for images after the designated index
+            if index >= slowdown_start_index:  # Start slowing down from this image onwards
+                if distance_from_selected_game < 300:  # You can adjust the threshold for slowing down
+                    # Gradually decrease the speed when closer to the selected game (but not below 0.5)
+                    speed = max(0.5, speed * 0.98)  # Slowly reduce speed as the image gets closer
+
+            # Move the image to the left (adjust by smaller increments, controlled by speed)
+            self.canvas.move(image_item, -speed, 0)  # Move left by a smaller, more consistent speed
+
+            # If the image is non-selected and still on screen, we need to continue sliding
+            if coords[0] > -canvas_width:
+                non_selected_images_offscreen = False
+
+            # If the selected game image reaches the center, make it fully visible and stop the animation
+            if not selected_image_reached_center and distance_from_selected_game <= 20 and image_item == self.all_images[-1]:
+                selected_image_reached_center = True
+                # Ensure the selected image is fully displayed in the center
+                self.canvas.itemconfig(image_item, anchor=tk.CENTER)
+                self.canvas.coords(image_item, selected_game_position, coords[1])  # Keep it centered
+
+            # Remove images that move off the canvas
+            if coords[0] < -canvas_width:  # Image is fully off-screen to the left
+                images_to_remove.append((image_item, img_tk))
+
+        # Remove out-of-view images
+        for image_item, img_tk in images_to_remove:
+            self.canvas.delete(image_item)
+            self.active_images.remove((image_item, img_tk))
+
+        # Continue sliding if the selected image hasn't reached the center yet
+        if self.spin_effect_active and not non_selected_images_offscreen:
+            # Continue sliding and update the canvas with the current speed
+            self.animation_id = self.root.after(20, self.slide_images, speed)  # Schedule the next frame
+        else:
+            # Stop animation and show the selected game in the center
+            self.show_selected_game()
+
+    def stop_animation(self):
+        """Stop the sliding animation."""
+        self.spin_effect_active = False
+        # Optionally, you can update the label or perform any other tasks when the animation stops
+        print("Animation stopped - Selected game header reached the left side of the canvas.")
+
+
+    def preload_images(self):
+        """Preload all game header images into memory."""
+        self.preloaded_images = {}
         
-    def cycle_game_names_and_images(self, speed):
-        """Cycle through game names and images rapidly."""
+        # Load all images for the games
+        for game in self.installed_games:
+            random_game_name = game["name"]
+            random_app_id = game["app_id"]
+
+            # Get the game image (try local header image first, then fallback to Steam API)
+            game_image = get_local_header_image(random_app_id, random_game_name, self.steam_path)
+            if not game_image:
+                game_image = get_steam_header_image(random_app_id)
+
+            # Check if the image was loaded successfully
+            if game_image:
+                # Get the canvas width (this will be available after the canvas is initialized)
+                canvas_width = 600  # Set a default width if canvas width is not yet available
+                canvas_height = 280  # Set a default height if canvas height is not yet available
+
+                # Calculate the aspect ratio and resize the image
+                image_width = canvas_width  # Resize the image to fill the canvas width
+                image_height = int(game_image.size[1] * (canvas_width / game_image.size[0]))  # Maintain aspect ratio
+                
+                if image_width > 0 and image_height > 0:
+                    # Resize the image to fit the canvas width while maintaining aspect ratio
+                    game_image = game_image.resize((image_width, image_height), Image.Resampling.LANCZOS)
+                    
+                    # Store the preloaded image in memory (as a PhotoImage object)
+                    self.preloaded_images[random_app_id] = ImageTk.PhotoImage(game_image)
+                else:
+                    print(f"Invalid image dimensions for game {random_game_name} (ID: {random_app_id})")
+            else:
+                print(f"Failed to load image for game {random_game_name} (ID: {random_app_id})")
+        
+    def cycle_game_names_and_images(self, speed=10):
+        """Cycle through multiple game headers by sliding them across the canvas."""
         if not self.spin_effect_active:
             return
 
-        random_game = random.choice(self.installed_games)
-        random_game_name = random_game["name"]
-        random_app_id = random_game["app_id"]
+        # Clear previous images
+        for image_item, _ in self.active_images:
+            self.canvas.delete(image_item)
+        self.active_images.clear()
 
-        # Attempt to get the local header image first
-        game_image = get_local_header_image(random_app_id, random_game_name, self.steam_path)
+        # Filter out the excluded apps (by app_id and keywords)
+        filtered_games = [
+            game for game in self.installed_games
+            if game["app_id"] not in EXCLUDED_APP_IDS and not any(keyword.lower() in game["name"].lower() for keyword in EXCLUDED_KEYWORDS)
+        ]
 
-        # If no local image, fall back to Steam header image
-        if not game_image:
-            print(f"Using Steam header image for {random_game_name}.")
-            game_image = get_steam_header_image(random_app_id)
+        # Get a list of random games (excluding the selected one)
+        random_games = [game for game in filtered_games if game["app_id"] != self.final_app_id]
+        
+        # Shuffle the random games to get a varied set of images each time
+        random.shuffle(random_games)
 
-        # Update displayed name and image
-        self.label_game_name.config(text=random_game_name)
-        self.show_game_image(game_image)
+        # Add non-selected images first and selected image last
+        images = random_games + [self.selected_game]  # Automatically add all non-selected games and selected game at the end
+        images.append(self.selected_game)  # Add the selected game image last
 
-        # Gradually slow down cycling
-        if speed < 200:  # Increase delay incrementally
-            self.root.after(speed, self.cycle_game_names_and_images, speed + 10)
+        # Start the X position off-screen to the right
+        x_position = self.canvas.winfo_width()
+
+        # List to track all images and their associated game names
+        self.all_images = []
+        self.game_names = []
+
+        for game in images:
+            random_game_name = game["name"]
+            random_app_id = game["app_id"]
+
+            # Use preloaded image from memory
+            game_image = self.preloaded_images.get(random_app_id)
+
+            if game_image:
+                # Get the preloaded image from memory
+                img_tk = game_image
+
+                # Set initial X position (off-screen to the right)
+                canvas_width = self.canvas.winfo_width()
+                canvas_height = self.canvas.winfo_height()
+                image_width = canvas_width
+                image_height = img_tk.height()
+
+                image_y = canvas_height - image_height // 2  # Stick to bottom of the canvas
+                image_item = self.canvas.create_image(x_position, image_y, image=img_tk, anchor=tk.CENTER)
+
+                # Store reference and move the X position to the next image
+                self.active_images.append((image_item, img_tk))  # Store both canvas item and image reference
+
+                # Track all images and associated game names
+                self.all_images.append(image_item)
+                self.game_names.append(random_game_name)
+
+                x_position += image_width  # Move the X position for the next image
+
+        # Start sliding the images
+        self.slide_images(speed)
 
     def show_selected_game(self):
-        """Display the selected game and its size."""
+        """Display the selected game when the sliding stops."""
+        # Clear all images from the canvas
+        for image_item, _ in self.active_images:
+            self.canvas.delete(image_item)
+        self.active_images.clear()
+
+        # Update the game name and size labels
         self.label_game_name.config(text=self.final_game_name)
 
         # Update the game size text dynamically
@@ -961,24 +856,35 @@ class SteamRouletteGUI:
         else:
             self.label_game_size.config(text="Size on disk: Unavailable")
 
-        # Attempt to get the local header image first
+        # Get the selected game's image
         game_image = get_local_header_image(self.final_app_id, self.final_game_name, self.steam_path)
-
-        # If no local image, fall back to Steam header image
         if not game_image:
-            print(f"Using Steam header image for {self.final_game_name}.")
             game_image = get_steam_header_image(self.final_app_id)
 
-        # Display the game's image
-        self.show_game_image(game_image)
+        if game_image:
+            # Resize the image to fit the canvas width
+            canvas_width = self.canvas.winfo_width()
+            canvas_height = self.canvas.winfo_height()
+            
+            # Resize the image to fit the width of the canvas
+            image_width = canvas_width  # Fill the whole canvas width
+            image_height = int(game_image.size[1] * (canvas_width / game_image.size[0]))  # Maintain aspect ratio
+            game_image = game_image.resize((image_width, image_height), Image.Resampling.LANCZOS)
+            img_tk = ImageTk.PhotoImage(game_image)
 
-        # Enable action buttons
-        self.button_launch.config(state=tk.NORMAL)
-        self.button_store.config(state=tk.NORMAL)
-        self.button_spin.config(state=tk.NORMAL, text="Re-Roll")
+            # Dynamically calculate canvas center
+            image_x = canvas_width // 2  # Center horizontally
+            image_y = canvas_height // 2  # Center vertically
 
-        # Stop the spinning effect
-        self.spin_effect_active = False
+            # Clear the canvas and display the image
+            self.canvas.delete("all")  # Clear previous canvas content
+            self.image_item = self.canvas.create_image(image_x, image_y, image=img_tk, anchor=tk.CENTER)
+            self.canvas.image = img_tk  # Keep a reference
+
+            # Re-enable buttons
+            self.button_spin.config(state=tk.NORMAL, text="Re-Roll")
+            self.button_launch.config(state=tk.NORMAL)
+            self.button_store.config(state=tk.NORMAL)
 
     def show_game_image(self, image):
         """Display the game image or fallback text in the GUI."""
@@ -988,6 +894,7 @@ class SteamRouletteGUI:
         if isinstance(image, Image.Image):  # Check if it's a PIL Image object
             # Set a fixed width for the image (e.g., 600px)
             target_width = 600
+            target_height = 280
 
             # Get the original width and height of the image
             original_width, original_height = image.size
