@@ -737,11 +737,8 @@ class SteamRouletteGUI:
         
         return normalized_name
 
-
     def generate_acronym(self, game_title):
-        """
-        Generate possible acronyms from the game title.
-        """
+        """Generate possible acronyms from the game title."""
         words = game_title.split()
         acronym_variants = []
 
@@ -765,9 +762,7 @@ class SteamRouletteGUI:
         return acronym_variants
 
     def search_folder_by_title(self, game_title, base_path):
-        """
-        Search for folder names that match the significant parts of the game title or acronyms.
-        """
+        """Search for folder names that match the significant parts of the game title or acronyms."""
         game_folders = os.listdir(os.path.join(base_path, "common"))
         matching_folders = []
 
@@ -776,8 +771,11 @@ class SteamRouletteGUI:
         # Normalize the game title
         normalized_title = self.normalize_name(game_title)
 
-        # Extract primary keywords (e.g., "Plants", "vs.", "Zombies")
-        primary_keywords = game_title.split(":")[0].strip().split()[:3]  # First 3 significant words
+        # Extract primary keywords
+        primary_keywords = game_title.split(":")[0].strip().split()[:3]  # First 5 significant words
+
+        # Ensure we don't split important numbers like '4' or '1' in titles like "Crash Bandicoot 4" or "MGS1"
+        primary_keywords = [word for word in primary_keywords if word.isalnum()]  # Keep alphanumeric words
 
         print(f"Normalized game title for matching: '{normalized_title}'")
         
@@ -902,9 +900,16 @@ class SteamRouletteGUI:
         random_game_name = random_game["name"]
         random_app_id = random_game["app_id"]
 
+        # Attempt to get the local header image first
+        game_image = get_local_header_image(random_app_id, random_game_name, self.steam_path)
+
+        # If no local image, fall back to Steam header image
+        if not game_image:
+            print(f"Using Steam header image for {random_game_name}.")
+            game_image = get_steam_header_image(random_app_id)
+
         # Update displayed name and image
         self.label_game_name.config(text=random_game_name)
-        game_image = get_fallback_image(random_game_name, random_app_id, self.steam_path)
         self.show_game_image(game_image)
 
         # Gradually slow down cycling
@@ -921,8 +926,15 @@ class SteamRouletteGUI:
         else:
             self.label_game_size.config(text="Size: Unavailable")
 
+        # Attempt to get the local header image first
+        game_image = get_local_header_image(self.final_app_id, self.final_game_name, self.steam_path)
+
+        # If no local image, fall back to Steam header image
+        if not game_image:
+            print(f"Using Steam header image for {self.final_game_name}.")
+            game_image = get_steam_header_image(self.final_app_id)
+
         # Display the game's image
-        game_image = get_fallback_image(self.final_game_name, self.final_app_id, self.steam_path)
         self.show_game_image(game_image)
 
         # Enable action buttons
