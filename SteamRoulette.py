@@ -780,6 +780,7 @@ class SteamRouletteGUI:
             "misao - 2024 hd remaster": "misao",
             "psycho-pass: mandatory happiness": "psycho-pass mandatory happiness steam",
             "gal*gun: double peace": "galgun double peace",
+            "south park: snow day!": "southparksnowday",
         }
 
         # Lowercase the title for easy matching
