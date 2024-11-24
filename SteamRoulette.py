@@ -770,13 +770,16 @@ class SteamRouletteGUI:
 
     def simplify_game_title(self, game_title):
         """Simplifies game titles to a commonly recognized name format for folder matching."""
-        # Define some commonly known cases that can be simplified
+        # Define some commonly known cases that can be simplified (Replace with your own if you experience issues finding a game folder that is very different)
         simplifications = {
             "crayola scoot": "scoot",
             "metal gear solid": "mgs1",
             "hitman world of assassination": "hitman3",
             "while true": "wtl",
             "shin megami tensei v": "smt5v",
+            "misao - 2024 hd remaster": "misao",
+            "re-legion": "re-legion",
+            "psycho-pass mandatory happiness": "psycho-pass mandatory happiness steam",
         }
 
         # Lowercase the title for easy matching
