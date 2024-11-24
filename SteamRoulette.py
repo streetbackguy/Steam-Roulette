@@ -21,7 +21,7 @@ from steam.client import SteamClient
 STEAM_PATH = os.path.expanduser(r"C:\Program Files (x86)\Steam")
 LIBRARY_FOLDERS_FILE = os.path.join(STEAM_PATH, "steamapps", "libraryfolders.vdf")
 client = SteamClient()
-EXCLUDED_APP_IDS = {228980, 250820, 365670}
+EXCLUDED_APP_IDS = {228980, 250820, 365670, 223850}
 EXCLUDED_KEYWORDS = ["redistributable", "steamvr", "blender", "tool", "wallpaper engine", "3dmark"]
 
 # Function Definitions (Ensure these are defined above usage in your code)
@@ -722,7 +722,8 @@ class SteamRouletteGUI:
             .replace("®", "") \
             .replace(",", "_") \
             .replace("(", "") \
-            .replace(")", "")
+            .replace(")", "") \
+            .replace("*", "")
         
         # Handle "vs." and "vs" consistently
         normalized_name = normalized_name.replace("_vs_", "_vs_")
@@ -738,28 +739,34 @@ class SteamRouletteGUI:
         return normalized_name
 
     def generate_acronym(self, game_title):
-        """Generate possible acronyms from the game title."""
+        """Generate possible acronyms or simplified forms for a game title."""
+        # Split the game title into words, keeping only significant parts
         words = game_title.split()
+
         acronym_variants = []
 
-        # Acronym based on the first letter of each significant word
-        acronym_variants.append("".join([word[0].upper() for word in words if word.isalpha()]))
+        # Generate acronym based on the first letter of each significant word
+        acronym = "".join([word[0].upper() for word in words if word.isalpha()])
+        acronym_variants.append(acronym)
 
-        # Include the first 3 letters of the first word + first letter of the second word
-        if len(words) > 1:
-            acronym_variants.append(words[0][:3].upper() + words[1][0].upper())  # Example: "Shin Megami" -> "ShiM"
-
-        # Include numbers if present (e.g., "V5" or "V")
-        version_match = re.search(r"\bV\d*\b", game_title, re.IGNORECASE)  # Match versions like "V5" or "V"
+        # Check if there is a version number in the title (e.g., "1", "2", "V1", "V2")
+        version_match = re.search(r'\d+', game_title)  # Find any digits
         if version_match:
-            version = version_match.group().upper()
-            acronym_variants.append("".join([word[0].upper() for word in words[:3]]) + version)  # Example: "SMT5"
-        
-        # Special case: titles with "Vengeance" or similar keywords
+            # Append the version number to the acronym (e.g., MGS1, Crash4)
+            version = version_match.group(0)
+            acronym_variants.append(acronym + version)
+
+        # If the title contains a colon, we could split and use the first part
+        if ":" in game_title:
+            primary_keywords = game_title.split(":")[0].strip().split()
+            acronym_variants.append("".join([word[0].upper() for word in primary_keywords if word.isalpha()]))
+
+        # Handle titles with keywords like "Vengeance" or custom cases
         if "vengeance" in game_title.lower():
             acronym_variants.append("".join([word[0].upper() for word in words[:3]]) + "V")
 
-        return acronym_variants
+        # Ensure unique variants
+        return list(set(acronym_variants))
 
     def search_folder_by_title(self, game_title, base_path):
         """Search for folder names that match the significant parts of the game title or acronyms."""
@@ -771,10 +778,8 @@ class SteamRouletteGUI:
         # Normalize the game title
         normalized_title = self.normalize_name(game_title)
 
-        # Extract primary keywords
-        primary_keywords = game_title.split(":")[0].strip().split()[:3]  # First 5 significant words
-
-        # Ensure we don't split important numbers like '4' or '1' in titles like "Crash Bandicoot 4" or "MGS1"
+        # Extract primary keywords (First 3 significant words and keep numbers intact)
+        primary_keywords = game_title.split(":")[0].strip().split()[:3]  # First 3 significant words
         primary_keywords = [word for word in primary_keywords if word.isalnum()]  # Keep alphanumeric words
 
         print(f"Normalized game title for matching: '{normalized_title}'")
@@ -922,9 +927,9 @@ class SteamRouletteGUI:
 
         # Update the game size text dynamically
         if self.game_size is not None:
-            self.label_game_size.config(text=f"Size: {self.game_size:.2f} GB")
+            self.label_game_size.config(text=f"Size on disk: {self.game_size:.2f} GB")
         else:
-            self.label_game_size.config(text="Size: Unavailable")
+            self.label_game_size.config(text="Size on disk: Unavailable")
 
         # Attempt to get the local header image first
         game_image = get_local_header_image(self.final_app_id, self.final_game_name, self.steam_path)
