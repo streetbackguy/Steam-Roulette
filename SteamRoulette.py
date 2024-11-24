@@ -709,26 +709,29 @@ class SteamRouletteGUI:
         normalized_name = normalized_name.lower()
         
         # Remove common redundant words often appended to game titles
-        redundant_words = ["ultimate", "edition", "definitive", "remastered", "deluxe", "sith"]
+        redundant_words = ["ultimate", "edition", "definitive", "remastered", "deluxe", "sith", "game of the year"]
         for word in redundant_words:
             normalized_name = normalized_name.replace(word, "")
-
-        # Replace spaces, hyphens, and other common special characters
+        
+        # Replace spaces, hyphens, colons, and other special characters
         normalized_name = normalized_name.replace(" ", "_") \
             .replace("-", "_") \
             .replace(":", "") \
+            .replace(".", "") \
             .replace("™", "") \
             .replace("®", "") \
             .replace(",", "_") \
             .replace("(", "") \
             .replace(")", "")
-
+        
+        # Handle "vs." and "vs" consistently
+        normalized_name = normalized_name.replace("_vs_", "_vs_")
+        
         # Handle apostrophes based on the `keep_apostrophes` parameter
         if not keep_apostrophes:
             normalized_name = normalized_name.replace("'", "")
-
+        
         # Fix specific cases for common words
-        normalized_name = normalized_name.replace("vs", "vs")
         normalized_name = normalized_name.replace("_the_", "_")  # Collapse "the"
         normalized_name = normalized_name.replace("_of_", "_")  # Collapse "of"
         
@@ -749,12 +752,12 @@ class SteamRouletteGUI:
         if len(words) > 1:
             acronym_variants.append(words[0][:3].upper() + words[1][0].upper())  # Example: "Shin Megami" -> "ShiM"
 
-        # Include numbers if present
+        # Include numbers if present (e.g., "V5" or "V")
         version_match = re.search(r"\bV\d*\b", game_title, re.IGNORECASE)  # Match versions like "V5" or "V"
         if version_match:
             version = version_match.group().upper()
             acronym_variants.append("".join([word[0].upper() for word in words[:3]]) + version)  # Example: "SMT5"
-
+        
         # Special case: titles with "Vengeance" or similar keywords
         if "vengeance" in game_title.lower():
             acronym_variants.append("".join([word[0].upper() for word in words[:3]]) + "V")
@@ -773,12 +776,16 @@ class SteamRouletteGUI:
         # Normalize the game title
         normalized_title = self.normalize_name(game_title)
 
-        # Extract primary keywords (e.g., "Shin", "Megami", "Tensei")
+        # Extract primary keywords (e.g., "Plants", "vs.", "Zombies")
         primary_keywords = game_title.split(":")[0].strip().split()[:3]  # First 3 significant words
 
+        print(f"Normalized game title for matching: '{normalized_title}'")
+        
         # First, look for an exact match based on the normalized game title
         for folder in game_folders:
-            if normalized_title == self.normalize_name(folder):
+            folder_normalized = self.normalize_name(folder)
+            print(f"Checking folder: {folder} (normalized: {folder_normalized})")
+            if normalized_title == folder_normalized:
                 matching_folders.append(folder)
 
         # If no exact match, try matching significant keywords
@@ -790,7 +797,7 @@ class SteamRouletteGUI:
         # If still no matches, try acronym matches
         if not matching_folders:
             acronym_variants = self.generate_acronym(game_title)
-            print(f"Trying acronyms for matching folder...")
+            print(f"Trying acronyms for matching folder...")  # Debug log for acronym matching
             for folder in game_folders:
                 for acronym in acronym_variants:
                     if acronym.lower() in folder.lower():
@@ -805,13 +812,20 @@ class SteamRouletteGUI:
             print(f"Game path does not exist: {game_path}")
             return 0  # Return 0 if the path is invalid
 
-        # Option 1: Use shutil.disk_usage to get the folder size directly
         try:
             total_size = 0
             # Walk through the folder recursively and add the size of all files
             for dirpath, dirnames, filenames in os.walk(game_path):
                 for filename in filenames:
-                    total_size += os.path.getsize(os.path.join(dirpath, filename))
+                    file_path = os.path.join(dirpath, filename)
+                    
+                    # Skip symlinks
+                    if os.path.islink(file_path):
+                        continue
+                    
+                    # Add file size if it's a regular file
+                    if os.path.isfile(file_path):
+                        total_size += os.path.getsize(file_path)
             
             total_size_gb = total_size / (1024 * 1024 * 1024)  # Convert bytes to GB
             print(f"Total size of '{game_path}': {total_size_gb:.2f} GB")
