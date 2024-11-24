@@ -781,6 +781,7 @@ class SteamRouletteGUI:
             "psycho-pass: mandatory happiness": "psycho-pass mandatory happiness steam",
             "gal*gun: double peace": "galgun double peace",
             "south park: snow day!": "southparksnowday",
+            "persona 3 reload": "p3r",
         }
 
         # Lowercase the title for easy matching
