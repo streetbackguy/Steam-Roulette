@@ -768,6 +768,28 @@ class SteamRouletteGUI:
         # Ensure unique variants
         return list(set(acronym_variants))
 
+    def simplify_game_title(self, game_title):
+        """Simplifies game titles to a commonly recognized name format for folder matching."""
+        # Define some commonly known cases that can be simplified
+        simplifications = {
+            "crayola scoot": "scoot",
+            "metal gear solid": "mgs1",
+            "hitman world of assassination": "hitman3",
+            "while true": "wtl",
+            "shin megami tensei v": "smt5v",
+        }
+
+        # Lowercase the title for easy matching
+        game_title_lower = game_title.lower()
+
+        # Check if the title matches any simplifications and return the simplified version
+        for key, value in simplifications.items():
+            if key in game_title_lower:
+                return value
+
+        # If no simplification applies, return the game title as is
+        return game_title
+
     def search_folder_by_title(self, game_title, base_path):
         """Search for folder names that match the significant parts of the game title or acronyms."""
         game_folders = os.listdir(os.path.join(base_path, "common"))
@@ -778,17 +800,20 @@ class SteamRouletteGUI:
         # Normalize the game title
         normalized_title = self.normalize_name(game_title)
 
+        # First, check if we have a well-known part that could simplify the title (e.g., "Crayola Scoot" -> "Scoot")
+        simplified_title = self.simplify_game_title(game_title)
+
         # Extract primary keywords (First 3 significant words and keep numbers intact)
-        primary_keywords = game_title.split(":")[0].strip().split()[:3]  # First 3 significant words
+        primary_keywords = simplified_title.split(":")[0].strip().split()[:3]  # First 3 significant words
         primary_keywords = [word for word in primary_keywords if word.isalnum()]  # Keep alphanumeric words
 
-        print(f"Normalized game title for matching: '{normalized_title}'")
-        
-        # First, look for an exact match based on the normalized game title
+        print(f"Normalized simplified game title for matching: '{simplified_title}'")
+
+        # First, look for an exact match based on the simplified game title
         for folder in game_folders:
             folder_normalized = self.normalize_name(folder)
             print(f"Checking folder: {folder} (normalized: {folder_normalized})")
-            if normalized_title == folder_normalized:
+            if simplified_title.lower() == folder_normalized.lower():
                 matching_folders.append(folder)
 
         # If no exact match, try matching significant keywords
