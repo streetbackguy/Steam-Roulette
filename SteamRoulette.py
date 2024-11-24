@@ -774,7 +774,7 @@ class SteamRouletteGUI:
         simplifications = {
             "crayola scoot": "scoot",
             "metal gear solid - master collection version": "mgs1",
-            "hitman: world of assassination": "hitman3",
+            "hitman: world of assassination": "hitman 3",
             "while true: learn()": "wtl",
             "shin megami tensei v: vengeance": "smt5v",
             "misao - 2024 hd remaster": "misao",
