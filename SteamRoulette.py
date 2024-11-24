@@ -2,13 +2,16 @@ import os
 import sys;
 import random
 import time
+import shutil
+import string
+import unicodedata
 import platform
 import webbrowser
 import subprocess
 import vdf
 import re
 import tkinter as tk
-from tkinter import simpledialog, messagebox
+from tkinter import simpledialog, messagebox, ttk
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 import requests
 from io import BytesIO
@@ -19,7 +22,7 @@ STEAM_PATH = os.path.expanduser(r"C:\Program Files (x86)\Steam")
 LIBRARY_FOLDERS_FILE = os.path.join(STEAM_PATH, "steamapps", "libraryfolders.vdf")
 client = SteamClient()
 EXCLUDED_APP_IDS = {228980, 250820, 365670}
-EXCLUDED_KEYWORDS = ["redistributable", "steamvr", "blender", "tool", "wallpaper engine"]
+EXCLUDED_KEYWORDS = ["redistributable", "steamvr", "blender", "tool", "wallpaper engine", "3dmark"]
 
 # Function Definitions (Ensure these are defined above usage in your code)
 
@@ -500,6 +503,8 @@ class SteamRouletteGUI:
         self.installed_games = installed_games
         self.steam_path = steam_path
         self.api_key = self.load_api_key()  # Load the API key if available
+        self.selected_game = None
+        self.game_size = 0
 
         # Use resource_path for bundled paths
         if hasattr(sys, '_MEIPASS'):  # PyInstaller temp folder
@@ -540,6 +545,10 @@ class SteamRouletteGUI:
         self.label_game_name = tk.Label(root, text="Welcome to Steam Roulette!\n Click the button below to start spinning!", font=("Arial", 16))
         self.label_game_name.pack(pady=0)
 
+        # Add a label for displaying the game size
+        self.label_game_size = tk.Label(root, text="", font=("Arial", 10))
+        self.label_game_size.pack(pady=5)
+
         self.label_image = tk.Label(root)
         self.label_image.pack(pady=10)
 
@@ -569,6 +578,15 @@ class SteamRouletteGUI:
         self.spin_effect_active = False
         self.final_game_name = None
         self.final_app_id = None
+
+    def get_drives(self):
+        """Return a list of available drives."""
+        drives = []
+        for drive in string.ascii_uppercase:
+            drive_path = f"{drive}:\\"
+            if os.path.exists(drive_path):
+                drives.append(drive_path)
+        return drives
 
     def group_games_by_drive(self, games):
         """Group installed games by their drive."""
@@ -637,8 +655,174 @@ class SteamRouletteGUI:
         if api_key:
             save_api_key(api_key)  # Save the API key if provided
 
+    def get_steam_library_paths(self, steam_config_path="C:\\Program Files (x86)\\Steam\\config\\libraryfolders.vdf"):
+        """Get all the Steam library paths from the libraryfolders.vdf file."""
+        library_paths = []
+        
+        if os.path.exists(steam_config_path):
+            try:
+                with open(steam_config_path, "rb") as f:
+                    vdf_data = f.read()
+                
+                # Attempt to decode the file with UTF-8, if it fails, try ISO-8859-1
+                try:
+                    vdf_data = vdf_data.decode("utf-8")
+                except UnicodeDecodeError:
+                    vdf_data = vdf_data.decode("ISO-8859-1")
+                
+                lines = vdf_data.splitlines()
+                for line in lines:
+                    if '"path"' in line:
+                        path = line.split('"')[3]
+                        if os.path.exists(path):
+                            library_paths.append(path)
+            except Exception as e:
+                print(f"Error reading libraryfolders.vdf: {e}")
+        
+        return library_paths
+
+    def find_game_folder_using_app_id(self, app_id, steam_path="C:\\Program Files (x86)\\Steam"):
+        """Automatically find the game folder using app_id and Steam's library structure."""
+        library_paths = self.get_steam_library_paths(os.path.join(steam_path, "config", "libraryfolders.vdf"))
+        
+        for library in library_paths:
+            game_folder = os.path.join(library, "steamapps", "common", str(app_id))
+            if os.path.exists(game_folder):
+                print(f"Game folder for app_id {app_id} found at: {game_folder}")
+                return game_folder
+        
+        print(f"Game folder for app_id {app_id} not found.")
+        return None
+
+    def normalize_name(self, name, keep_apostrophes=False):
+        """
+        Normalize a game name by handling spaces, hyphens, colons, special characters, and accented characters.
+        
+        Parameters:
+        - name (str): The game name to normalize.
+        - keep_apostrophes (bool): Whether to retain apostrophes in the normalized name.
+        """
+        # Normalize Unicode characters and convert to ASCII
+        normalized_name = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('ASCII')
+        
+        # Make everything lowercase
+        normalized_name = normalized_name.lower()
+        
+        # Remove common redundant words often appended to game titles
+        redundant_words = ["ultimate", "edition", "definitive", "remastered", "deluxe", "sith"]
+        for word in redundant_words:
+            normalized_name = normalized_name.replace(word, "")
+
+        # Replace spaces, hyphens, and other common special characters
+        normalized_name = normalized_name.replace(" ", "_") \
+            .replace("-", "_") \
+            .replace(":", "") \
+            .replace("™", "") \
+            .replace("®", "") \
+            .replace(",", "_") \
+            .replace("(", "") \
+            .replace(")", "")
+
+        # Handle apostrophes based on the `keep_apostrophes` parameter
+        if not keep_apostrophes:
+            normalized_name = normalized_name.replace("'", "")
+
+        # Fix specific cases for common words
+        normalized_name = normalized_name.replace("vs", "vs")
+        normalized_name = normalized_name.replace("_the_", "_")  # Collapse "the"
+        normalized_name = normalized_name.replace("_of_", "_")  # Collapse "of"
+        
+        return normalized_name
+
+
+    def generate_acronym(self, game_title):
+        """
+        Generate possible acronyms from the game title.
+        """
+        words = game_title.split()
+        acronym_variants = []
+
+        # Acronym based on the first letter of each significant word
+        acronym_variants.append("".join([word[0].upper() for word in words if word.isalpha()]))
+
+        # Include the first 3 letters of the first word + first letter of the second word
+        if len(words) > 1:
+            acronym_variants.append(words[0][:3].upper() + words[1][0].upper())  # Example: "Shin Megami" -> "ShiM"
+
+        # Include numbers if present
+        version_match = re.search(r"\bV\d*\b", game_title, re.IGNORECASE)  # Match versions like "V5" or "V"
+        if version_match:
+            version = version_match.group().upper()
+            acronym_variants.append("".join([word[0].upper() for word in words[:3]]) + version)  # Example: "SMT5"
+
+        # Special case: titles with "Vengeance" or similar keywords
+        if "vengeance" in game_title.lower():
+            acronym_variants.append("".join([word[0].upper() for word in words[:3]]) + "V")
+
+        return acronym_variants
+
+    def search_folder_by_title(self, game_title, base_path):
+        """
+        Search for folder names that match the significant parts of the game title or acronyms.
+        """
+        game_folders = os.listdir(os.path.join(base_path, "common"))
+        matching_folders = []
+
+        print(f"Searching for matching folders for '{game_title}'...")  # Debug log for folder matching
+
+        # Normalize the game title
+        normalized_title = self.normalize_name(game_title)
+
+        # Extract primary keywords (e.g., "Shin", "Megami", "Tensei")
+        primary_keywords = game_title.split(":")[0].strip().split()[:3]  # First 3 significant words
+
+        # First, look for an exact match based on the normalized game title
+        for folder in game_folders:
+            if normalized_title == self.normalize_name(folder):
+                matching_folders.append(folder)
+
+        # If no exact match, try matching significant keywords
+        if not matching_folders:
+            for folder in game_folders:
+                if all(keyword.lower() in folder.lower() for keyword in primary_keywords):
+                    matching_folders.append(folder)
+
+        # If still no matches, try acronym matches
+        if not matching_folders:
+            acronym_variants = self.generate_acronym(game_title)
+            print(f"Trying acronyms for matching folder...")
+            for folder in game_folders:
+                for acronym in acronym_variants:
+                    if acronym.lower() in folder.lower():
+                        matching_folders.append(folder)
+
+        print(f"Matching folders for '{game_title}': {matching_folders}")  # Debug log for folder matching
+        return matching_folders
+
+    def calculate_game_size(self, game_path):
+        """Calculate the total size of all files in the game folder using disk usage."""
+        if not os.path.exists(game_path):
+            print(f"Game path does not exist: {game_path}")
+            return 0  # Return 0 if the path is invalid
+
+        # Option 1: Use shutil.disk_usage to get the folder size directly
+        try:
+            total_size = 0
+            # Walk through the folder recursively and add the size of all files
+            for dirpath, dirnames, filenames in os.walk(game_path):
+                for filename in filenames:
+                    total_size += os.path.getsize(os.path.join(dirpath, filename))
+            
+            total_size_gb = total_size / (1024 * 1024 * 1024)  # Convert bytes to GB
+            print(f"Total size of '{game_path}': {total_size_gb:.2f} GB")
+            return total_size_gb
+
+        except Exception as e:
+            print(f"Error calculating game size for {game_path}: {e}")
+            return 0
+
     def spin_wheel(self):
-        """Pick a random game from the installed games and display it."""
+        """Start the spinning animation and pick a random game."""
         if not self.installed_games:
             messagebox.showinfo("Error", "No games found.")
             return
@@ -646,21 +830,44 @@ class SteamRouletteGUI:
         self.selected_game = random.choice(self.installed_games)
         game_title = self.selected_game["name"]
         app_id = self.selected_game["app_id"]
+        game_path = os.path.join(self.selected_game["path"], "common", game_title)
+        base_path = self.selected_game.get("path", steam_path)
 
-        # Disable the Spin button during the spin
+        # Search for the folder that matches the game title
+        matching_folders = self.search_folder_by_title(game_title, base_path)
+
+        if not matching_folders:
+            print(f"Unable to resolve game path for {game_title}")
+            return
+
+        # For simplicity, we take the first match
+        game_path = os.path.join(base_path, "common", matching_folders[0])
+        print(f"Found game folder: {game_path}")
+
+        # Recalculate the total game size (including all files in subfolders)
+        self.game_size = self.calculate_game_size(game_path)
+        print(f"Total game size for '{game_title}': {self.game_size:.2f} GB")
+
+        # Disable buttons during the spin
         self.button_spin.config(state=tk.DISABLED)
         self.button_launch.config(state=tk.DISABLED)
         self.button_store.config(state=tk.DISABLED)
 
-        # Initialize spin effect flags
+        # Initialize spinning
         self.final_game_name = game_title
         self.final_app_id = app_id
         self.spin_effect_active = True
 
-        # Start cycling through random games
-        self.cycle_game_names_and_images()
+        # Start animation
+        self.cycle_game_names_and_images(speed=50)
 
-        # After a short delay, stop the spinning and show the selected game
+        # Stop spinning after 2 seconds and show the result
+        self.root.after(2000, self.show_selected_game)
+
+        # Start animation
+        self.cycle_game_names_and_images(speed=50)
+
+        # Stop spinning after 2 seconds and show the result
         self.root.after(2000, self.show_selected_game)
 
     def spin_game_names_and_images(self, final_game_name, final_app_id):
@@ -672,39 +879,44 @@ class SteamRouletteGUI:
         self.spin_effect_active = True
         self.cycle_game_names_and_images()
         
-    def cycle_game_names_and_images(self):
-        """Cycle through the game names and images rapidly."""
+    def cycle_game_names_and_images(self, speed):
+        """Cycle through game names and images rapidly."""
         if not self.spin_effect_active:
             return
 
-        # Pick a random game from installed games to display
         random_game = random.choice(self.installed_games)
         random_game_name = random_game["name"]
         random_app_id = random_game["app_id"]
 
-        # Display the random game name and image
+        # Update displayed name and image
         self.label_game_name.config(text=random_game_name)
         game_image = get_fallback_image(random_game_name, random_app_id, self.steam_path)
         self.show_game_image(game_image)
 
-        # Continue the cycle every 100 milliseconds
-        if self.spin_effect_active:
-            self.root.after(50, self.cycle_game_names_and_images)
+        # Gradually slow down cycling
+        if speed < 200:  # Increase delay incrementally
+            self.root.after(speed, self.cycle_game_names_and_images, speed + 10)
 
     def show_selected_game(self):
-        """Show the selected game after the spin stops."""
+        """Display the selected game and its size."""
         self.label_game_name.config(text=self.final_game_name)
+
+        # Update the game size text dynamically
+        if self.game_size is not None:
+            self.label_game_size.config(text=f"Size: {self.game_size:.2f} GB")
+        else:
+            self.label_game_size.config(text="Size: Unavailable")
+
+        # Display the game's image
         game_image = get_fallback_image(self.final_game_name, self.final_app_id, self.steam_path)
         self.show_game_image(game_image)
 
-        # Enable the action buttons
+        # Enable action buttons
         self.button_launch.config(state=tk.NORMAL)
         self.button_store.config(state=tk.NORMAL)
-
-        # Re-enable the Spin button for the next round
         self.button_spin.config(state=tk.NORMAL, text="Re-Roll")
 
-        # Stop the spin effect
+        # Stop the spinning effect
         self.spin_effect_active = False
 
     def show_game_image(self, image):
