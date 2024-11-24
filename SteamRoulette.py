@@ -773,13 +773,14 @@ class SteamRouletteGUI:
         # Define some commonly known cases that can be simplified (Replace with your own if you experience issues finding a game folder that is very different)
         simplifications = {
             "crayola scoot": "scoot",
-            "metal gear solid": "mgs1",
-            "hitman world of assassination": "hitman3",
-            "while true": "wtl",
-            "shin megami tensei v": "smt5v",
+            "metal gear solid - master collection version": "mgs1",
+            "hitman: world of assassination": "hitman3",
+            "while true: learn()": "wtl",
+            "shin megami tensei v: vengeance": "smt5v",
             "misao - 2024 hd remaster": "misao",
             "re-legion": "re-legion",
-            "psycho-pass mandatory happiness": "psycho-pass mandatory happiness steam",
+            "psycho-pass: mandatory happiness": "psycho-pass mandatory happiness steam",
+            "gal*gun: double peace": "galgun double peace",
         }
 
         # Lowercase the title for easy matching
