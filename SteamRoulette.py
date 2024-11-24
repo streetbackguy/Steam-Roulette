@@ -778,7 +778,6 @@ class SteamRouletteGUI:
             "while true: learn()": "wtl",
             "shin megami tensei v: vengeance": "smt5v",
             "misao - 2024 hd remaster": "misao",
-            "re-legion": "re-legion",
             "psycho-pass: mandatory happiness": "psycho-pass mandatory happiness steam",
             "gal*gun: double peace": "galgun double peace",
         }
