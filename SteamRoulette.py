@@ -171,7 +171,11 @@ class SteamRouletteGUI:
 
         # Label displaying "Games Found on Drives" (bottom right corner)
         self.label_game_count = tk.Label(root, text=self.generate_games_found_text(), font=("Arial", 10))
-        self.label_game_count.place(relx=1.0, rely=1.0, anchor='se')  # Bottom-right corner
+        self.label_game_count.place(relx=1.0, rely=1.0, anchor='se')
+
+        # Label displaying copyright notice in the top-left corner
+        self.copyright_notice = tk.Label(root, text="© Streetbackguy 2024", font=("Arial", 8))
+        self.copyright_notice.place(relx=0.0, rely=0.0, anchor='nw', x=5, y=5)
 
         # Initial theme mode (light mode by default)
         self.is_dark_mode = False
@@ -189,13 +193,9 @@ class SteamRouletteGUI:
         self.button_toggle_theme = tk.Button(self.button_frame, text="Toggle Dark Mode", command=self.toggle_theme, font=("Arial", 12))
         self.button_toggle_theme.grid(row=0, column=1, pady=5, padx=5)
 
-        # Set initial theme (light mode)
-        self.set_light_mode()
-
         # Canvas
         self.canvas = tk.Canvas(root, width=600, height=300, bg="black")
         self.canvas.pack(pady=1)
-
 
         # Create a frame to contain the game name label and other elements
         utility_frame = tk.Frame(self.root, bg=self.light_mode_bg)
@@ -205,6 +205,7 @@ class SteamRouletteGUI:
         self.update_theme(utility_frame, self.light_mode_bg, self.light_mode_fg)
 
         # Button to spin the wheel
+        self.selected_num_games = None
         self.button_spin = tk.Button(utility_frame, text="Spin the Wheel", command=self.spin_wheel, font=("Arial", 14))
         self.button_spin.grid(row=0, column=0, pady=10, padx=10, sticky="n", columnspan=2)
 
@@ -215,6 +216,14 @@ class SteamRouletteGUI:
         # Button to go to the Steam store for the selected game
         self.button_store = tk.Button(utility_frame, text="Go to Steam Store", command=self.open_store, state=tk.DISABLED, font=("Arial", 12))
         self.button_store.grid(row=1, column=1, pady=5, padx=4)
+
+        # Add a button that triggers the popup to input the number of games
+        self.button_set_number_of_games = tk.Button(self.root, text="Set Number of Games", command=self.set_number_of_games)
+        self.button_set_number_of_games.place(relx=0.0, rely=0.76, anchor='w')  # Positioned below canvas on the left
+
+        # Label to show the number of games selected (initially empty)
+        self.label_number_of_games = tk.Label(self.root, text="Number of games: All Games", font=("Arial", 8))
+        self.label_number_of_games.place(relx=0.0, rely=0.8, anchor='w')  # Positioned below the button
 
         self.active_images = []
         self.selected_game_image = None
@@ -248,6 +257,9 @@ class SteamRouletteGUI:
 
         except Exception as e:
             print(f"Error loading logo image: {e}")
+
+        # Set initial theme (light mode)
+        self.set_light_mode()
 
     def preload_images(self):
         """Preload images into memory for smoother animation with parallel processing."""
@@ -320,22 +332,93 @@ class SteamRouletteGUI:
         # Toggle the mode flag
         self.is_dark_mode = not self.is_dark_mode
 
+    def toggle_spin_button(self):
+        """Toggle the spin button between Spin and Re-roll."""
+        if self.button_spin.cget("text") == "Spin the Wheel":
+            # When Spin Wheel is clicked, call spin_wheel method
+            self.spin_wheel()
+        else:
+            # When Re-Roll is clicked, rerun the spin with the same number of games
+            self.spin_wheel()
+
+    def set_number_of_games(self):
+        """Popup window to ask user for how many games to spin between."""
+        # Create a new Toplevel window for input
+        self.popup = tk.Toplevel(self.root)
+        self.popup.title("Select Number of Games")
+        self.popup.geometry("300x150")
+
+        # Label to guide the user
+        label = tk.Label(self.popup, text="Enter number of games to spin:")
+        label.pack(pady=10)
+
+        # Entry widget to accept input
+        self.num_games_entry = tk.Entry(self.popup)
+        self.num_games_entry.pack(pady=5)
+
+        # Submit button to get the value from the entry box
+        submit_button = tk.Button(self.popup, text="Submit", command=self.submit_number_of_games)
+        submit_button.pack(pady=10)
+
+    def submit_number_of_games(self):
+        """Retrieve the number of games inputted and update the animation."""
+        try:
+            # Get the value entered by the user
+            num_games_to_spin = int(self.num_games_entry.get())
+            
+            # Check if the input is within a valid range
+            if num_games_to_spin > len(self.installed_games) or num_games_to_spin < 1:
+                raise ValueError("Number must be between 1 and the total number of games.")
+            
+            # Set the number of games to spin
+            self.selected_num_games = num_games_to_spin  # Store the selected number of games
+            
+            # Update the label to show the selected number of games
+            self.label_number_of_games.config(text=f"Number of games selected: {num_games_to_spin}")
+
+            # Close the popup window after submitting
+            self.popup.destroy()
+
+            # Update the button text to "Spin Wheel" once the number is set
+            self.button_spin.config(state=tk.NORMAL, text="Spin Wheel")
+
+        except ValueError as e:
+            # If input is invalid, show an error message
+            error_label = tk.Label(self.popup, text=f"Error: {e}", fg="red")
+            error_label.pack()
+
     def spin_wheel(self):
-        """Start the spinning animation and pick a random game."""
-        self.selected_game = random.choice(self.installed_games)
-        self.button_spin.config(state=tk.DISABLED, text="Re-roll")
-        self.label_game_name.config(text="")
-        self.label_welcome.config(text="")
+        """Start the spinning animation based on the selected number of games."""
+        if not self.selected_num_games:
+            num_games_to_spin = len(self.installed_games)  # Spin all games by default
+        else:
+            num_games_to_spin = self.selected_num_games  # Spin selected number of games
+
+        # Randomly select the number of games specified by the user
+        selected_games = random.sample(self.installed_games, num_games_to_spin)
+        
+        # Display the selected games (can be adjusted to your animation logic)
+        print(f"Spinning the following games: {', '.join([game['name'] for game in selected_games])}")
 
         # Reset the animation speed to the initial value for a fresh start
         self.animation_speed = self.initial_animation_speed
+
+        # Disable the spin button while the animation is running
+        self.button_spin.config(state=tk.DISABLED, text="Re-Roll")
+
+        # Clear previous game name and other UI elements
+        self.label_game_name.config(text="")
+        self.label_welcome.config(text="")
 
         # If there was a previously displayed selected game image, remove it
         if hasattr(self, 'selected_game_item'):
             self.canvas.delete(self.selected_game_item)  # Remove the previous selected game image
 
-        # Start the spinning effect
-        self.cycle_images()
+        # Set the selected game to be randomly chosen
+        self.selected_game = random.choice(selected_games)
+
+        # Start the spinning effect with the selected games
+        self.cycle_images(selected_games)
 
     def reroll_game(self):
         """Handle the reroll button click."""
@@ -357,7 +440,7 @@ class SteamRouletteGUI:
         # Display the selected game image (it will be a new one)
         self.display_selected_game()
 
-    def cycle_images(self):
+    def cycle_images(self, selected_games):
         """Cycle through the images as part of the spinning effect, adding the selected game's image at the end."""
         self.selected_game_image = self.preloaded_images.get(self.selected_game["app_id"])
         self.active_images = []
@@ -392,7 +475,7 @@ class SteamRouletteGUI:
         total_distance = len(self.active_images) * canvas_width
 
         # Set the desired duration (in milliseconds)
-        desired_duration = 10000  # 10 seconds
+        desired_duration = 8000  # 10 seconds
 
         # Calculate the frame delay or speed dynamically
         self.frame_delay = 16  # Default frame delay in ms (60 FPS)
@@ -431,11 +514,55 @@ class SteamRouletteGUI:
         self.start_time = time.time()  # Start the timer to calculate total spinning duration
         slide()
 
+    def update_animation_preview(self, num_games_to_spin):
+        """Update the animation preview with the selected number of games."""
+        # Randomly select the number of games specified by the user
+        selected_games = random.sample(self.installed_games, num_games_to_spin)
+        
+        # Display the selected games (can be adjusted to your animation logic)
+        print(f"Selected games for preview: {', '.join([game['name'] for game in selected_games])}")
+
+        # Set up the canvas with the selected games (you can update the visuals here)
+        self.selected_games_preview = selected_games
+        
+        # Optionally, update the UI with a label displaying the number of games selected
+        self.label_game_name.config(text=f"{len(selected_games)} Games Selected")
+        
+        # You could refresh your canvas or just display the images of the selected games
+        self.display_selected_games_preview(selected_games)
+
+    def display_selected_games_preview(self, selected_games):
+        """Display a preview of the selected games on the canvas."""
+        # Clear any previous preview images (if needed)
+        self.canvas.delete("preview")  # Assuming you label preview images with 'preview'
+        
+        # Show the preview of the selected games on the canvas
+        for index, game in enumerate(selected_games):
+            img = self.preloaded_images.get(game["app_id"])
+            img_tk = ImageTk.PhotoImage(img)
+            x_position = 600 * (index + 1)  # Adjust based on how you want to space the images
+            self.canvas.create_image(x_position, 150, image=img_tk, anchor=tk.CENTER, tags="preview")
+        
+    def display_selected_games_preview(self, selected_games):
+        """Display a preview of the selected games on the canvas."""
+        # Clear any previous preview images (if needed)
+        self.canvas.delete("preview")  # Assuming you label preview images with 'preview'
+        
+        # Show the preview of the selected games on the canvas
+        for index, game in enumerate(selected_games):
+            img = self.preloaded_images.get(game["app_id"])
+            img_tk = ImageTk.PhotoImage(img)
+            x_position = 600 * (index + 1)  # Adjust based on how you want to space the images
+            self.canvas.create_image(x_position, 150, image=img_tk, anchor=tk.CENTER, tags="preview")
+
+        # Optionally, update the UI with a label displaying the number of games selected
+        self.label_game_name.config(text=f"{len(selected_games)} Games Selected")
+
     # Dynamically adjust both speed and frame delay
     def setup_animation(self):
         canvas_width = self.canvas.winfo_width()
         total_distance = len(self.active_images) * canvas_width
-        desired_duration = 10000  # 10 seconds in milliseconds
+        desired_duration = 8000  # 8 seconds in milliseconds
 
         # Adjust frame delay or animation speed dynamically
         self.frame_delay = max(1, 16)  # Default to 60 FPS if possible
