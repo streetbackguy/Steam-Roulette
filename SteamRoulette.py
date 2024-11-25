@@ -1,4 +1,5 @@
 import os
+import io
 import random
 import platform
 import webbrowser
@@ -12,6 +13,7 @@ import sys
 import concurrent.futures
 import threading
 import time
+import json
 
 # Constants
 STEAM_PATH = os.path.expanduser(r"C:\Program Files (x86)\Steam")
@@ -169,6 +171,21 @@ class SteamRouletteGUI:
         except Exception as e:
             print(f"Error setting window icon: {e}")
 
+        # Path to the folder containing the header images
+        if getattr(sys, 'frozen', False):  # If running as an executable
+            base_path = sys._MEIPASS
+        else:  # If running as a script
+            base_path = os.path.dirname(os.path.abspath(__file__))
+
+        # Define the relative path to the 'header_images' folder
+        self.header_images_folder = os.path.join(base_path, "image_cache")
+
+        # Try to load images locally, if they don't exist, fallback to Steam API
+        if os.path.exists(self.header_images_folder) and os.listdir(self.header_images_folder):
+            self.header_images = self.load_header_images(self.header_images_folder)
+        else:
+            self.header_images = self.fetch_random_game_header_from_steam()
+
         # Label displaying "Games Found on Drives" (bottom right corner)
         self.label_game_count = tk.Label(root, text=self.generate_games_found_text(), font=("Arial", 10))
         self.label_game_count.place(relx=1.0, rely=1.0, anchor='se')
@@ -233,6 +250,8 @@ class SteamRouletteGUI:
         # Preload the images
         self.preloaded_images = {}
         self.preload_images()
+        # Display a random header image on startup
+        self.display_random_header_image()
 
         # Use resource_path to get the correct logo path
         logo_path = resource_path("SteamRouletteLogo.png")
@@ -260,6 +279,8 @@ class SteamRouletteGUI:
 
         # Set initial theme (light mode)
         self.set_light_mode()
+        # Display a random header image on startup
+        self.display_random_header_image()
 
     def preload_images(self):
         """Preload images into memory for smoother animation with parallel processing."""
@@ -299,6 +320,81 @@ class SteamRouletteGUI:
                 file.write(api_key)
             self.api_key = api_key
             messagebox.showinfo("API Key", "API Key saved successfully.")
+
+    def load_header_images(self, folder_path):
+        """Load all image files from the specified folder."""
+        image_files = []
+        for filename in os.listdir(folder_path):
+            # Check if the file is a valid image (add more file extensions if needed)
+            if filename.endswith(('.png', '.jpg', '.jpeg', '.gif')):
+                image_files.append(os.path.join(folder_path, filename))
+        return image_files
+
+    def fetch_random_game_header_from_steam(self):
+        """Fetch a random game's header image from the Steam API."""
+        random_game_id = random.randint(1, 100000)  # Example: random game ID between 1 and 100000
+        url = f"https://store.steampowered.com/api/appdetails?appids={random_game_id}"
+        try:
+            response = requests.get(url)
+            data = response.json()
+
+            if data.get(str(random_game_id)) and data[str(random_game_id)].get("data"):
+                game_data = data[str(random_game_id)]["data"]
+                if game_data.get("header_image"):
+                    header_image_url = game_data["header_image"]
+                    return [header_image_url]  # Return the header image URL as a list for consistency
+                else:
+                    print("No header image found for the game.")
+            else:
+                print("Failed to retrieve data for the game.")
+        except Exception as e:
+            print(f"Error fetching header from Steam API: {e}")
+        return []
+
+    def display_random_header_image(self):
+        """Display a random header image on the canvas."""
+        if self.header_images:
+            # Select a random image from the list of header images
+            random_image_path = random.choice(self.header_images)
+
+            # If the image is a URL (Steam API), download and display it
+            if random_image_path.startswith("http"):  # Check if the path is a URL
+                self.display_image_from_url(random_image_path)
+            else:
+                self.display_image_from_file(random_image_path)
+
+    def display_image_from_file(self, image_path):
+        """Display the image from a local file on the canvas."""
+        try:
+            img = Image.open(image_path)
+            img_resized = img.resize((600, 300), Image.Resampling.LANCZOS)  # Resize image to fit the canvas
+            img_tk = ImageTk.PhotoImage(img_resized)
+
+            # Display the image on the canvas
+            self.canvas.create_image(0, 0, anchor='nw', image=img_tk)
+
+            # Keep a reference to the image to avoid garbage collection
+            self.canvas.image = img_tk  # Keep a reference so the image stays in memory
+
+        except Exception as e:
+            print(f"Error loading image from file {image_path}: {e}")
+
+    def display_image_from_url(self, image_url):
+        """Download and display the image from a URL on the canvas."""
+        try:
+            img_data = requests.get(image_url).content
+            img = Image.open(io.BytesIO(img_data))
+            img_resized = img.resize((600, 300), Image.Resampling.LANCZOS)  # Resize image to fit the canvas
+            img_tk = ImageTk.PhotoImage(img_resized)
+
+            # Display the image on the canvas
+            self.canvas.create_image(0, 0, anchor='nw', image=img_tk)
+
+            # Keep a reference to the image to avoid garbage collection
+            self.canvas.image = img_tk  # Keep a reference so the image stays in memory
+
+        except Exception as e:
+            print(f"Error loading image from URL {image_url}: {e}")
 
     def set_light_mode(self):
         """Set the window to light mode."""
