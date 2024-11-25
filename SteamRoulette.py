@@ -234,13 +234,17 @@ class SteamRouletteGUI:
         self.button_store = tk.Button(utility_frame, text="Go to Steam Store", command=self.open_store, state=tk.DISABLED, font=("Arial", 12))
         self.button_store.grid(row=1, column=1, pady=5, padx=4)
 
+        # Create a container frame to hold the button and label
+        self.frame_controls = tk.Frame(self.root)
+        self.frame_controls.place(relx=0.0, rely=0.85, anchor='w')
+
         # Add a button that triggers the popup to input the number of games
-        self.button_set_number_of_games = tk.Button(self.root, text="Set Number of Games", command=self.set_number_of_games)
-        self.button_set_number_of_games.place(relx=0.0, rely=0.76, anchor='w')  # Positioned below canvas on the left
+        self.button_set_number_of_games = tk.Button(self.frame_controls, text="Set Number of Games", command=self.set_number_of_games)
+        self.button_set_number_of_games.grid(row=0, column=0, sticky='w', pady=5)  # Positioned within the frame
 
         # Label to show the number of games selected (initially empty)
-        self.label_number_of_games = tk.Label(self.root, text="Number of games: All Games", font=("Arial", 8))
-        self.label_number_of_games.place(relx=0.0, rely=0.8, anchor='w')  # Positioned below the button
+        self.label_number_of_games = tk.Label(self.frame_controls, text="Number of games: All Games", font=("Arial", 8))
+        self.label_number_of_games.grid(row=1, column=0, sticky='w')
 
         self.active_images = []
         self.selected_game_image = None
@@ -476,7 +480,7 @@ class SteamRouletteGUI:
             self.popup.destroy()
 
             # Update the button text to "Spin Wheel" once the number is set
-            self.button_spin.config(state=tk.NORMAL, text="Spin Wheel")
+            self.button_spin.config(state=tk.NORMAL, text="Spin the Wheel")
 
         except ValueError as e:
             # If input is invalid, show an error message
@@ -676,7 +680,7 @@ class SteamRouletteGUI:
         self.canvas.image = img_tk  # Keep reference to prevent garbage collection
 
         # Re-enable the buttons and re-enable the "Re-roll" button with correct text
-        self.button_spin.config(state=tk.NORMAL, text="Re-roll")
+        self.button_spin.config(state=tk.NORMAL, text="Re-Roll")
         self.button_launch.config(state=tk.NORMAL)
         self.button_store.config(state=tk.NORMAL)
 
