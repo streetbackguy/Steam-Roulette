@@ -11,6 +11,7 @@ import vdf
 import sys
 import concurrent.futures
 import threading
+import time
 
 # Constants
 STEAM_PATH = os.path.expanduser(r"C:\Program Files (x86)\Steam")
@@ -146,7 +147,7 @@ class SteamRouletteGUI:
 
         # Set initial animation speed
         self.animation_speed = 200  # Controls the distance moved per frame
-        self.frame_delay = 10  # Controls the speed of the animation (time between frames)
+        self.frame_delay = 16  # Controls the speed of the animation (time between frames)
 
         self.root.title("Steam Roulette")
         self.root.geometry("600x700")
@@ -195,6 +196,7 @@ class SteamRouletteGUI:
         self.canvas = tk.Canvas(root, width=600, height=300, bg="black")
         self.canvas.pack(pady=1)
 
+
         # Create a frame to contain the game name label and other elements
         utility_frame = tk.Frame(self.root, bg=self.light_mode_bg)
         utility_frame.pack(pady=5)
@@ -223,7 +225,7 @@ class SteamRouletteGUI:
         self.preloaded_images = {}
         self.preload_images()
 
-        # Use resource_path to get the correct image path
+        # Use resource_path to get the correct logo path
         logo_path = resource_path("SteamRouletteLogo.png")
         try:
             logo_image = Image.open(logo_path)
@@ -385,41 +387,60 @@ class SteamRouletteGUI:
     def animate_images(self):
         """Animate the images sliding across the canvas."""
         canvas_width = self.canvas.winfo_width()  # Get the width of the canvas
-        canvas_center = canvas_width / 2  # Center of the canvas
+
+        # Calculate total distance for animation
+        total_distance = len(self.active_images) * canvas_width
+
+        # Set the desired duration (in milliseconds)
+        desired_duration = 10000  # 10 seconds
+
+        # Calculate the frame delay or speed dynamically
+        self.frame_delay = 16  # Default frame delay in ms (60 FPS)
+        frames = desired_duration // self.frame_delay  # Total number of frames
+        self.animation_speed = max(1, total_distance // frames)  # Pixels per frame
 
         def slide():
             # Move all images to the left
             for image_item, img_tk in self.active_images:
                 self.canvas.move(image_item, -self.animation_speed, 0)  # Move images to the left
 
-            # Find the three-quarters image by index
-            three_quarter_index = (len(self.active_images) * 3) // 4  # Three-quarters index
-            three_quarter_image = self.active_images[three_quarter_index]  # Get the three-quarters image
-            three_quarter_image_x = self.canvas.coords(three_quarter_image[0])[0]  # x-coordinate of the three-quarters image
+            # Check if the current image is in the last 10 images
+            for i, (image_item, img_tk) in enumerate(self.active_images[-5:]):  # Last 5 images
+                image_x = self.canvas.coords(image_item)[0]  # x-coordinate of the image
+                img_width = self.canvas.bbox(image_item)[2] - self.canvas.bbox(image_item)[0]  # Image width
+                image_left_x = image_x - img_width / 2  # Left edge of the image
 
-            # Slowing down effect: Gradually reduce the speed after the median image's left edge reaches the left side of the window (x = 0)
-            img_width = self.canvas.bbox(three_quarter_image[0])[2] - self.canvas.bbox(three_quarter_image[0])[0]  # Image width
-            threequarter_image_left_x = three_quarter_image_x - img_width / 2  # Left edge of the three quarter index image
-
-            if threequarter_image_left_x <= 0:  # Once the three quarter index image's left edge reaches or crosses the left side of the canvas
-                self.animation_speed = max(5, self.animation_speed * 0.98)  # Gradually slow down the speed
+                # If the image is within the last 10 images, start slowing down
+                if image_left_x <= 0:  # If the image is near or at the left edge
+                    self.animation_speed = max(5, self.animation_speed * 0.98)  # Gradually slow down the speed
 
             # Get the x-coordinate of the top-left corner of the last image
-            last_image_x = self.canvas.coords(self.active_images[-1][0])[0]  # x-coordinate of the top-left corner of the last image
+            last_image_x = self.canvas.coords(self.active_images[-1][0])[0]  # x-coordinate of the last image
             img_width = self.canvas.bbox(self.active_images[-1][0])[2] - self.canvas.bbox(self.active_images[-1][0])[0]  # Image width
-
-            # Calculate the x-coordinate of the left side of the last image
             last_image_left_x = last_image_x - img_width / 2  # Left edge of the last image
 
             # Stop the animation when the last image's left edge reaches the left edge of the canvas (x = 0)
-            if last_image_left_x <= 0:  # Last image's left edge reaches the left side of the canvas
+            if last_image_left_x <= 0:  # Last image reaches the left side
                 self.display_selected_game()  # Display selected game image
+                print(f"Final spinning duration: {time.time() - self.start_time:.2f} seconds")
                 return  # End the animation
 
             # Continue moving the images if they haven't reached the left edge
             self.animation_id = self.root.after(self.frame_delay, slide)
 
+        self.start_time = time.time()  # Start the timer to calculate total spinning duration
         slide()
+
+    # Dynamically adjust both speed and frame delay
+    def setup_animation(self):
+        canvas_width = self.canvas.winfo_width()
+        total_distance = len(self.active_images) * canvas_width
+        desired_duration = 10000  # 10 seconds in milliseconds
+
+        # Adjust frame delay or animation speed dynamically
+        self.frame_delay = max(1, 16)  # Default to 60 FPS if possible
+        frames = desired_duration // self.frame_delay
+        self.animation_speed = max(1, total_distance // frames)
 
     def display_selected_game(self):
         """Display the selected game image after the animation stops."""
