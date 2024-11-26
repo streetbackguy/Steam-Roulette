@@ -251,7 +251,7 @@ class SteamRouletteGUI:
 
         # Label for Selecting whether to include uninstalled games or not
         self.label_number_of_games = tk.Label(self.yes_no_frame, text="Include Uninstalled Games?", font=("Arial", 8))
-        self.label_number_of_games.grid(row=0, column=0, columnspan=2)
+        self.label_number_of_games.grid(row=0, column=0, columnspan=2, pady=2)
 
         # Yes button
         self.button_yes = tk.Button(self.yes_no_frame, text="Yes", command=self.on_yes_click)
