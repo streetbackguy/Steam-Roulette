@@ -11,9 +11,7 @@ from io import BytesIO
 import vdf
 import sys
 import concurrent.futures
-import threading
 import time
-import json
 
 # Constants
 STEAM_PATH = os.path.expanduser(r"C:\Program Files (x86)\Steam")
@@ -129,6 +127,11 @@ class SteamRouletteGUI:
         self.selected_game = None
         self.drives = drives
         self.api_key = self.load_api_key()
+
+        # Preload the images
+        self.preloaded_images = {}
+        # Preload Header Images
+        self.preload_images()
 
         # Define color schemes
         self.light_mode_bg = "#ffffff"
@@ -266,12 +269,6 @@ class SteamRouletteGUI:
         self.selected_game_item = None
         self.animation_id = None
 
-        # Preload the images
-        self.preloaded_images = {}
-        self.preload_images()
-        # Display a random header image on startup
-        self.display_random_header_image()
-
         # Use resource_path to get the correct logo path
         logo_path = resource_path("SteamRouletteLogo.png")
         try:
@@ -296,7 +293,7 @@ class SteamRouletteGUI:
         except Exception as e:
             print(f"Error loading logo image: {e}")
 
-        # Set initial theme (light mode)
+        # Set Light Mode
         self.set_light_mode()
         # Display a random header image on startup
         self.display_random_header_image()
