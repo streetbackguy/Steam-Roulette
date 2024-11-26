@@ -526,6 +526,8 @@ class SteamRouletteGUI:
 
         # Disable the spin button while the animation is running
         self.button_spin.config(state=tk.DISABLED, text="Re-Roll")
+        self.button_launch.config(state=tk.DISABLED)
+        self.button_store.config(state=tk.DISABLED)
 
         # Clear previous game name and other UI elements
         self.label_game_name.config(text="")
