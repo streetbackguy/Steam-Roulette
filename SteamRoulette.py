@@ -216,8 +216,6 @@ class SteamRouletteGUI:
         # Create a frame to contain the game name label and other elements
         utility_frame = tk.Frame(self.root, bg=self.light_mode_bg)
         utility_frame.pack(pady=5)
-        utility_frame.grid_columnconfigure(0, weight=1)
-        utility_frame.grid_columnconfigure(1, weight=1)
 
         # Apply light mode to the utility frame
         self.update_theme(utility_frame, self.light_mode_bg, self.light_mode_fg)
@@ -247,10 +245,21 @@ class SteamRouletteGUI:
         self.label_number_of_games = tk.Label(self.frame_controls, text="Number of games:\nAll Games", font=("Arial", 8))
         self.label_number_of_games.grid(row=1, column=0, sticky='w', padx=18)
 
-        # Create checkbox widget
-        self.checkbox_include_uninstalled = tk.Checkbutton(root, text="Include Owned but Not Installed Games")
-        self.checkbox_include_uninstalled.place(relx=1.0, rely=1.0, anchor='se', y=-2)
-        self.checkbox_include_uninstalled.bind("<Button-1>", lambda e: self.on_checkbox_click())
+        # Create a frame to contain the game name label and other elements
+        self.yes_no_frame = tk.Frame(self.root, bg=self.light_mode_bg)
+        self.yes_no_frame.place(relx=1.0, rely=1.0, anchor='se', x=-2, y=-2)  # Padding for the frame
+
+        # Label for Selecting whether to include uninstalled games or not
+        self.label_number_of_games = tk.Label(self.yes_no_frame, text="Include Uninstalled Games?", font=("Arial", 8))
+        self.label_number_of_games.grid(row=0, column=0, columnspan=2)
+
+        # Yes button
+        self.button_yes = tk.Button(self.yes_no_frame, text="Yes", command=self.on_yes_click)
+        self.button_yes.grid(row=1, column=0, pady=2, padx=2)
+        
+        # No button
+        self.button_no = tk.Button(self.yes_no_frame, text="No", command=self.on_no_click)
+        self.button_no.grid(row=1, column=1, pady=2, padx=2)
 
         self.active_images = []
         self.selected_game_image = None
@@ -360,6 +369,14 @@ class SteamRouletteGUI:
         except Exception as e:
             print(f"Error fetching header from Steam API: {e}")
         return []
+    
+    def on_yes_click(self):
+        print("Yes clicked")
+        # Add your logic for when 'Yes' is clicked
+
+    def on_no_click(self):
+        print("No clicked")
+        # Add your logic for when 'No' is clicked
 
     def display_random_header_image(self):
         """Display a random header image on the canvas."""
@@ -409,14 +426,10 @@ class SteamRouletteGUI:
     def set_light_mode(self):
         """Set the window to light mode."""
         self.update_theme(self.root, self.light_mode_bg, self.light_mode_fg)
-        # Explicitly update the checkbox to light mode
-        self.checkbox_include_uninstalled.config(bg=self.light_mode_bg, fg=self.light_mode_fg)
 
     def set_dark_mode(self):
         """Set the window to dark mode."""
         self.update_theme(self.root, self.dark_mode_bg, self.dark_mode_fg)
-        # Explicitly update the checkbox to dark mode
-        self.checkbox_include_uninstalled.config(bg=self.dark_mode_bg, fg=self.dark_mode_fg)
 
     def update_theme(self, widget, bg_color, fg_color):
         """Recursively update the background and foreground color for all widgets."""
@@ -434,13 +447,6 @@ class SteamRouletteGUI:
 
     def toggle_theme(self):
         """Toggle between light mode and dark mode."""
-        # Update the checkbox colors before the theme change
-        checkbox_bg_color = self.dark_mode_bg if not self.is_dark_mode else self.light_mode_bg
-        checkbox_fg_color = self.dark_mode_fg if not self.is_dark_mode else self.light_mode_fg
-
-        # Update the checkbox appearance immediately before the theme change
-        self.checkbox_include_uninstalled.config(bg=checkbox_bg_color, fg=checkbox_fg_color)
-
         # Now, toggle the theme for the entire window
         if self.is_dark_mode:
             self.set_light_mode()
@@ -449,16 +455,6 @@ class SteamRouletteGUI:
 
         # Toggle the mode flag after applying the theme
         self.is_dark_mode = not self.is_dark_mode
-
-        # Reapply the updated checkbox colors (important if theme change affects them)
-        self.checkbox_include_uninstalled.config(bg=checkbox_bg_color, fg=checkbox_fg_color)
-
-    def on_checkbox_click(self):
-        """Ensure the checkbox keeps its updated colors when clicked."""
-        # Manually update the checkbox's colors when it's clicked to avoid flashing
-        checkbox_bg_color = self.dark_mode_bg if self.is_dark_mode else self.light_mode_bg
-        checkbox_fg_color = self.dark_mode_fg if self.is_dark_mode else self.light_mode_fg
-        self.checkbox_include_uninstalled.config(bg=checkbox_bg_color, fg=checkbox_fg_color)
 
     def toggle_spin_button(self):
         """Toggle the spin button between Spin and Re-roll."""
