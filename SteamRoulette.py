@@ -153,8 +153,7 @@ class SteamRouletteGUI:
 
         self.root.title("Steam Roulette")
         self.root.geometry("600x700")
-        self.root.resizable(True, True)
-        self.root.minsize(600, 700)
+        self.root.resizable(False, False)
 
         try:
             # Use resource_path for bundled paths
@@ -188,7 +187,7 @@ class SteamRouletteGUI:
 
         # Label displaying "Games Found on Drives" (bottom right corner)
         self.label_game_count = tk.Label(root, text=self.generate_games_found_text(), font=("Arial", 10))
-        self.label_game_count.place(relx=1.0, rely=1.0, anchor='se')
+        self.label_game_count.place(relx=0.0, rely=0.0, anchor='nw', x=5, y=60)
 
         # Label displaying copyright notice in the top-left corner
         self.copyright_notice = tk.Label(root, text="© Streetbackguy 2024", font=("Arial", 8))
@@ -199,16 +198,16 @@ class SteamRouletteGUI:
 
         # Create a frame for the lower-left corner buttons
         self.button_frame = tk.Frame(root, bg=self.light_mode_bg)  # Define button_frame here first
-        self.button_frame.pack(pady=20)
-        self.button_frame.place(relx=0.0, rely=1.0, anchor='sw', x=10, y=-10)  # Padding for the frame
+        self.button_frame.pack(pady=5)
+        self.button_frame.place(relx=0.0, rely=1.0, anchor='sw', x=2, y=-2)  # Padding for the frame
 
         # Button to set the API Key
         self.button_set_api_key = tk.Button(self.button_frame, text="Set API Key", command=self.set_api_key, state=tk.NORMAL, font=("Arial", 12))
-        self.button_set_api_key.grid(row=0, column=0, pady=5, padx=5)
+        self.button_set_api_key.grid(row=0, column=0, pady=2, padx=2)
 
         # Button to toggle dark mode
         self.button_toggle_theme = tk.Button(self.button_frame, text="Toggle Dark Mode", command=self.toggle_theme, font=("Arial", 12))
-        self.button_toggle_theme.grid(row=0, column=1, pady=5, padx=5)
+        self.button_toggle_theme.grid(row=0, column=1, pady=2, padx=2)
 
         # Canvas
         self.canvas = tk.Canvas(root, width=600, height=300, bg="black")
@@ -217,6 +216,8 @@ class SteamRouletteGUI:
         # Create a frame to contain the game name label and other elements
         utility_frame = tk.Frame(self.root, bg=self.light_mode_bg)
         utility_frame.pack(pady=5)
+        utility_frame.grid_columnconfigure(0, weight=1)
+        utility_frame.grid_columnconfigure(1, weight=1)
 
         # Apply light mode to the utility frame
         self.update_theme(utility_frame, self.light_mode_bg, self.light_mode_fg)
@@ -231,20 +232,25 @@ class SteamRouletteGUI:
         self.button_launch.grid(row=1, column=0, pady=5, padx=4)
 
         # Button to go to the Steam store for the selected game
-        self.button_store = tk.Button(utility_frame, text="Go to Steam Store", command=self.open_store, state=tk.DISABLED, font=("Arial", 12))
+        self.button_store = tk.Button(utility_frame, text="Steam Storepage", command=self.open_store, state=tk.DISABLED, font=("Arial", 12))
         self.button_store.grid(row=1, column=1, pady=5, padx=4)
 
         # Create a container frame to hold the button and label
         self.frame_controls = tk.Frame(self.root)
-        self.frame_controls.place(relx=0.0, rely=0.85, anchor='w')
+        self.frame_controls.place(relx=0.0, rely=0.85, anchor='w', x=4, y=24)
 
         # Add a button that triggers the popup to input the number of games
         self.button_set_number_of_games = tk.Button(self.frame_controls, text="Set Number of Games", command=self.set_number_of_games)
-        self.button_set_number_of_games.grid(row=0, column=0, sticky='w', pady=5)  # Positioned within the frame
+        self.button_set_number_of_games.grid(row=0, column=0, sticky='w')  # Positioned within the frame
 
         # Label to show the number of games selected (initially empty)
-        self.label_number_of_games = tk.Label(self.frame_controls, text="Number of games: All Games", font=("Arial", 8))
-        self.label_number_of_games.grid(row=1, column=0, sticky='w')
+        self.label_number_of_games = tk.Label(self.frame_controls, text="Number of games:\nAll Games", font=("Arial", 8))
+        self.label_number_of_games.grid(row=1, column=0, sticky='w', padx=18)
+
+        # Create checkbox widget
+        self.checkbox_include_uninstalled = tk.Checkbutton(root, text="Include Owned but Not Installed Games")
+        self.checkbox_include_uninstalled.place(relx=1.0, rely=1.0, anchor='se', y=-2)
+        self.checkbox_include_uninstalled.bind("<Button-1>", lambda e: self.on_checkbox_click())
 
         self.active_images = []
         self.selected_game_image = None
@@ -403,10 +409,14 @@ class SteamRouletteGUI:
     def set_light_mode(self):
         """Set the window to light mode."""
         self.update_theme(self.root, self.light_mode_bg, self.light_mode_fg)
+        # Explicitly update the checkbox to light mode
+        self.checkbox_include_uninstalled.config(bg=self.light_mode_bg, fg=self.light_mode_fg)
 
     def set_dark_mode(self):
         """Set the window to dark mode."""
         self.update_theme(self.root, self.dark_mode_bg, self.dark_mode_fg)
+        # Explicitly update the checkbox to dark mode
+        self.checkbox_include_uninstalled.config(bg=self.dark_mode_bg, fg=self.dark_mode_fg)
 
     def update_theme(self, widget, bg_color, fg_color):
         """Recursively update the background and foreground color for all widgets."""
@@ -424,13 +434,31 @@ class SteamRouletteGUI:
 
     def toggle_theme(self):
         """Toggle between light mode and dark mode."""
+        # Update the checkbox colors before the theme change
+        checkbox_bg_color = self.dark_mode_bg if not self.is_dark_mode else self.light_mode_bg
+        checkbox_fg_color = self.dark_mode_fg if not self.is_dark_mode else self.light_mode_fg
+
+        # Update the checkbox appearance immediately before the theme change
+        self.checkbox_include_uninstalled.config(bg=checkbox_bg_color, fg=checkbox_fg_color)
+
+        # Now, toggle the theme for the entire window
         if self.is_dark_mode:
             self.set_light_mode()
         else:
             self.set_dark_mode()
 
-        # Toggle the mode flag
+        # Toggle the mode flag after applying the theme
         self.is_dark_mode = not self.is_dark_mode
+
+        # Reapply the updated checkbox colors (important if theme change affects them)
+        self.checkbox_include_uninstalled.config(bg=checkbox_bg_color, fg=checkbox_fg_color)
+
+    def on_checkbox_click(self):
+        """Ensure the checkbox keeps its updated colors when clicked."""
+        # Manually update the checkbox's colors when it's clicked to avoid flashing
+        checkbox_bg_color = self.dark_mode_bg if self.is_dark_mode else self.light_mode_bg
+        checkbox_fg_color = self.dark_mode_fg if self.is_dark_mode else self.light_mode_fg
+        self.checkbox_include_uninstalled.config(bg=checkbox_bg_color, fg=checkbox_fg_color)
 
     def toggle_spin_button(self):
         """Toggle the spin button between Spin and Re-roll."""
@@ -575,7 +603,7 @@ class SteamRouletteGUI:
         total_distance = len(self.active_images) * canvas_width
 
         # Set the desired duration (in milliseconds)
-        desired_duration = 8000  # 10 seconds
+        desired_duration = 7600  # 7.6 seconds, with slowdown it's 8 seconds
 
         # Calculate the frame delay or speed dynamically
         self.frame_delay = 16  # Default frame delay in ms (60 FPS)
