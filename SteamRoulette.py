@@ -15,6 +15,20 @@ import time
 import winreg
 import threading
 
+def create_cache_directory():
+    """Ensure the cache directory exists."""
+    # Define the path to store cached images
+    cache_dir = os.path.join(os.path.dirname(sys.executable), "image_cache")
+    
+    # Check if the directory exists, create it if it doesn't
+    if not os.path.exists(cache_dir):
+        os.makedirs(cache_dir)
+        print(f"Cache directory created at: {cache_dir}")
+    else:
+        print(f"Cache directory already exists at: {cache_dir}")
+    
+    return cache_dir
+
 def get_steam_install_path():
     try:
         # Open the registry key where Steam installation path is stored
@@ -48,35 +62,11 @@ def resource_path(relative_path):
     
     return os.path.join(base_path, relative_path)
 
-def create_cache_directory():
-    """Create the image cache directory in the same location as the executable/script."""
-    # Check if running from a frozen executable (PyInstaller)
-    if getattr(sys, 'frozen', False):
-        # If running from a bundled executable, use _MEIPASS
-        base_path = sys._MEIPASS  # Path where the temporary files are extracted
-    else:
-        # If running as a script, use the script's directory
-        base_path = os.path.dirname(os.path.realpath(__file__))
-
-    # Define the cache directory path
-    cache_dir = os.path.join(base_path, "image_cache")
-
-    # Check if the directory exists, and create it if it doesn't
-    if not os.path.exists(cache_dir):
-        os.makedirs(cache_dir)
-        print(f"Cache directory created at: {cache_dir}")
-    else:
-        print(f"Cache directory already exists at: {cache_dir}")
-
-    return cache_dir
-
 # Constants
 STEAM_PATH = get_steam_install_path() or find_steam_path_fallback()
 ICON_PATH = resource_path("SteamRouletteIcon.ico")
 IMAGE_PATH = os.path.dirname(os.path.abspath(__file__))
-EXCLUDED_APP_IDS = {228980, 250820, 365670, 223850}
-EXCLUDED_KEYWORDS = ["redistributable", "steamvr", "blender", "tool", "wallpaper engine", "3dmark"]
-PLACEHOLDER_IMAGE_DIMENSIONS = (200, 300)
+PLACEHOLDER_IMAGE_DIMENSIONS = (600, 300)
 
 # Utility Functions
 def parse_vdf(file_path):
@@ -106,16 +96,16 @@ def fetch_game_data(acf_path, library_path):
         print(f"Error reading ACF file {acf_path}: {e}")
         return {}
 
-def is_excluded(game):
-    """Determine if a game should be excluded."""
-    if not game or not game.get("app_id"):
-        return True
-    if game["app_id"] in EXCLUDED_APP_IDS or any(keyword in game["name"].lower() for keyword in EXCLUDED_KEYWORDS):
-        return True
-    return False
-
-def fetch_header_image(app_id, timeout=10):
+def fetch_header_image(app_id, cache_dir, timeout=10):
     """Fetch game header image from Steam or return a placeholder."""
+    cache_file_path = os.path.join(cache_dir, f"{app_id}.jpg")
+
+    # If the image is already cached, return the cached image
+    if os.path.exists(cache_file_path):
+        print(f"Using cached image for app_id {app_id}")
+        return Image.open(cache_file_path)
+
+    # If not cached, fetch the image from Steam and save it to the cache
     urls = [
         f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/header.jpg",
         f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/page_bg.jpg",
@@ -125,10 +115,13 @@ def fetch_header_image(app_id, timeout=10):
             print(f"Attempting to fetch image for app_id {app_id} from URL: {url}")
             response = requests.get(url, timeout=timeout)
             if response.status_code == 200:
-                print(f"Successfully fetched image for app_id {app_id}.")
-                return Image.open(BytesIO(response.content))
+                img = Image.open(BytesIO(response.content))
+                # Save the image to the cache
+                img.save(cache_file_path, "JPEG")
+                return img
         except Exception as e:
-            print(f"Error fetching image for app_id {app_id} from {url}: {e}")
+            print(f"Error fetching image for app_id {app_id}: {e}")
+
     print(f"No valid image found for app_id {app_id}. Using placeholder.")
     return create_placeholder_image("Image Unavailable")
 
@@ -320,8 +313,6 @@ class SteamRouletteGUI:
         else:  # If running as a script
             base_path = os.path.dirname(os.path.abspath(__file__))
 
-        self.display_image_from_file(base_path)
-
         # Initialize animation speed (starting value)
         self.initial_animation_speed = 50  # Adjust this as needed
         self.animation_speed = self.initial_animation_speed
@@ -338,17 +329,20 @@ class SteamRouletteGUI:
         self.frame_delay = 16  # Controls the speed of the animation (time between frames)
 
         self.root.title("Steam Roulette")
-        self.root.geometry("600x800")
+        self.root.geometry("600x700")
         self.root.resizable(False, False)
 
         # Define the relative path to the 'header_images' folder
-        self.header_images_folder = os.path.join(base_path, ".\\image_cache")
+        self.header_images_folder = os.path.join((sys.executable), "image_cache")
 
         # Try to load images locally, if they don't exist, fallback to Steam API
         if os.path.exists(self.header_images_folder) and os.listdir(self.header_images_folder):
             self.header_images = self.load_header_images(self.header_images_folder)
-        else:
-            self.header_images = self.fetch_random_game_header_from_steam()
+
+        # Canvas
+        self.canvas = tk.Canvas(self.root, width=600, height=300, bg="black")
+        self.canvas.pack(pady=1)
+        print(f"Canvas initialized: {self.canvas}")
 
         # Display a random header image on startup
         self.display_random_header_image()
@@ -381,20 +375,6 @@ class SteamRouletteGUI:
         self.button_toggle_theme = tk.Button(self.button_frame, text="Toggle Dark Mode", command=self.toggle_theme, font=("Arial", 12))
         self.button_toggle_theme.grid(row=0, column=2, pady=2, padx=2)
 
-        #Canvas frame
-        self.canvas_frame = tk.Frame(root, bg=self.light_mode_bg)
-        self.canvas_frame.pack(side="top", pady=5)
-
-        # Canvas
-        self.canvas = tk.Canvas(self.canvas_frame, width=600, height=300, bg="black")
-        self.canvas.pack(pady=1)
-
-        # Label displaying "Preloading Games" under the canvas
-        self.label_preloading = tk.Label(self.canvas_frame, text="Preloading: IDLE", font=("Arial", 10))
-        self.label_preloading.pack(side='left')
-
-        print(f"Canvas initialized: {self.canvas}")
-
         try:
             # Set the window and taskbar icon
             self.root.iconbitmap(ICON_PATH)  # Set .ico for the window
@@ -416,16 +396,16 @@ class SteamRouletteGUI:
         self.button_spin.grid(row=0, column=0, pady=10, padx=10, sticky="n", columnspan=2)
 
         # Button to launch the selected game
-        self.button_launch = tk.Button(utility_frame, text="Launch Game", command=self.launch_game, state=tk.DISABLED, font=("Arial", 12))
+        self.button_launch = tk.Button(utility_frame, text="Launch/Install Game", command=self.launch_game, state=tk.DISABLED, font=("Arial", 10))
         self.button_launch.grid(row=1, column=0, pady=5, padx=4)
 
         # Button to go to the Steam store for the selected game
-        self.button_store = tk.Button(utility_frame, text="Steam Storepage", command=self.open_store, state=tk.DISABLED, font=("Arial", 12))
+        self.button_store = tk.Button(utility_frame, text="Steam Storepage", command=self.open_store, state=tk.DISABLED, font=("Arial", 10))
         self.button_store.grid(row=1, column=1, pady=5, padx=4)
 
         # Create a container frame to hold the button and label
         self.frame_controls = tk.Frame(self.root)
-        self.frame_controls.place(relx=0.0, rely=0.85, anchor='w', x=4, y=24)
+        self.frame_controls.place(anchor='w', x=4, y=625)
 
         # Add a button that triggers the popup to input the number of games
         self.button_set_number_of_games = tk.Button(self.frame_controls, text="Set Number of Games", command=self.set_number_of_games)
@@ -488,7 +468,9 @@ class SteamRouletteGUI:
 
     def preload_images(self):
         """Preload images for both installed and uninstalled games."""
-        cache_dir = os.path.join(os.path.dirname(resource_path("")), "image_cache")
+        # Get the directory of the executable or script
+        base_dir = os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else __file__)
+        cache_dir = os.path.join(base_dir, "image_cache")
         os.makedirs(cache_dir, exist_ok=True)
 
         for game in self.installed_games + getattr(self, 'uninstalled_games', []):
@@ -503,7 +485,7 @@ class SteamRouletteGUI:
                 continue  # Skip if the image is already cached
 
             print(f"Fetching image for app_id {app_id}...")
-            img = fetch_header_image(app_id)  # Replace with actual image fetching logic
+            img = fetch_header_image(app_id, self.cache_dir)  # Replace with actual image fetching logic
 
             if img:
                 # Save the image to the cache
@@ -514,7 +496,7 @@ class SteamRouletteGUI:
 
     def generate_games_found_text(self):
         """Generate a summary of games found on each drive."""
-        drives_text = ["Games Found:"]
+        drives_text = ["Installed\nGames Found:"]
         for drive in self.drives:
             games_count = len([game for game in self.installed_games if game.get('path', '').startswith(drive)])
             drives_text.append(f"{drive} {games_count} games")
@@ -611,14 +593,17 @@ class SteamRouletteGUI:
         print("Uninstalled games images have been loaded.")
 
     def on_yes_click(self):
-        """Include uninstalled games in the cycle list with parallel loading."""
+        """Include uninstalled games in the cycle list and preload their images."""
         if not self.api_key:
             messagebox.showerror("Error", "Please set your Steam API key first.")
             return
 
+        # Disable the Spin button while loading images
+        self.button_spin.config(state=tk.DISABLED, text="Loading...")
+
         user_id = self.load_user_id_key()
         if not user_id:
-            user_id = self.fetch_steam_user_id(self.api_key, "Your Placeholder SteamID")  # Replace with appropriate SteamID logic.
+            user_id = self.fetch_steam_user_id(self.api_key, "Your Placeholder SteamID")
             if user_id:
                 self.save_user_id_key(user_id)
             else:
@@ -641,19 +626,16 @@ class SteamRouletteGUI:
         ]
 
         if new_uninstalled_games:
+            # Add uninstalled games to the list
             self.uninstalled_games = new_uninstalled_games
             self.installed_games.extend(new_uninstalled_games)
 
-            # Use threading to preload images for the games
+            # Load images for uninstalled games asynchronously
             threading.Thread(target=self.load_images_in_parallel, daemon=True).start()
 
             messagebox.showinfo("Uninstalled Games Added", f"Included {len(new_uninstalled_games)} uninstalled games.")
         else:
             messagebox.showinfo("No Uninstalled Games", "No uninstalled games were found to include.")
-
-        print("Yes Button clicked. Preparing images...")
-        # Do not start the animation here, only prepare images
-        self.prepare_images(self.installed_games + (self.uninstalled_games if hasattr(self, 'uninstalled_games') else []))
 
     def on_no_click(self):
         """Remove uninstalled games from the cycle list."""
@@ -664,31 +646,24 @@ class SteamRouletteGUI:
             messagebox.showinfo("Uninstalled Games Removed", "Uninstalled games have been removed from the cycle.")
 
     def load_images_in_parallel(self):
-        """Preload images for installed and uninstalled games in parallel."""
+        """Preload images for uninstalled games in the background."""
         self.is_images_preloaded = False  # Set flag to indicate images are not preloaded yet
-        
-        # Update the label to "ACTIVE" during preloading
-        self.root.after(0, lambda: self.label_preloading.config(text="Preloading: ACTIVE"))
 
-        # Preload images for all games
-        for game in self.installed_games + (self.uninstalled_games if hasattr(self, 'uninstalled_games') else []):
-            img = self.load_image(game["app_id"])
-            if img is not None:
-                self.preloaded_images[game["app_id"]] = img
+        # Preload images for all uninstalled games
+        for game in self.uninstalled_games:
+            app_id = game["app_id"]
+            fetch_header_image(app_id, self.cache_dir)  # Replace with your actual image loading function
 
-        # After preloading is done, notify the main thread and set the flag to True
-        self.root.after(0, self.on_images_preloaded)  # Call the method on the main thread
+        # After all images are preloaded, re-enable the button on the main thread
+        self.root.after(0, self.on_images_preloaded)
 
     def on_images_preloaded(self):
-        """This method is called when all images have been preloaded."""
+        """Called when all images are preloaded."""
         self.is_images_preloaded = True
-        print("Images are preloaded, ready for animation.")
-        
-        # Update the label to "IDLE" after preloading is done
-        self.root.after(0, lambda: self.label_preloading.config(text="Preloading: IDLE"))
 
-        # Prepare images for the animation (but do not start it yet)
-        self.prepare_images(self.installed_games + (self.uninstalled_games if hasattr(self, 'uninstalled_games') else []))
+        # Re-enable the Spin button after images are loaded
+        self.button_spin.config(state=tk.NORMAL, text="Spin the Wheel")
+        print("Images for uninstalled games have been loaded and cached.")
 
     def load_image_for_game(self, game, cache_dir):
         """Load and cache the image for a specific game."""
@@ -722,41 +697,19 @@ class SteamRouletteGUI:
         self.cycle_images(self.installed_games + getattr(self, 'uninstalled_games', []))
 
     def display_random_header_image(self):
-        """Display a random header image from the 'image_cache' folder on startup."""
-        # Define the cache directory
-        cache_dir = os.path.join(os.path.dirname(resource_path("")), "image_cache")
+        """Display a random header image on the canvas initially."""
+        random_app_id = random.choice(self.installed_games)["app_id"]  # Choose a random installed game
+        random_image = fetch_header_image(random_app_id, self.cache_dir)
 
-        # Check if the cache directory exists and contains images
-        if os.path.exists(cache_dir) and os.listdir(cache_dir):
-            # Get a random image file from the cache
-            cached_images = [file for file in os.listdir(cache_dir) if file.endswith(".jpg")]
-            if cached_images:
-                random_image_path = os.path.join(cache_dir, random.choice(cached_images))
-                self.display_image_from_file(random_image_path)
-            else:
-                print("No cached images found.")
-        else:
-            print("Cache folder is empty or does not exist.")
-            # Fallback to displaying a placeholder image or fetching from Steam
-            self.canvas.create_text(300, 150, text="No cached images available", fill="white", font=("Arial", 20))
+        # Resize the image to match the canvas size
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+        random_image_resized = random_image.resize((canvas_width, canvas_height), Image.Resampling.LANCZOS)
 
-    def display_image_from_file(self, image_path):
-        print(f"self: {self}, self.canvas: {getattr(self, 'canvas', 'Not Found')}")
-
-        if not hasattr(self, "canvas"):
-            print("Error: self.canvas does not exist.")
-            return
-
-        try:
-            img = Image.open(image_path)
-            img_resized = img.resize((600, 300), Image.Resampling.LANCZOS)
-            img_tk = ImageTk.PhotoImage(img_resized)
-
-            self.canvas.create_image(0, 0, anchor='nw', image=img_tk)
-            self.canvas.image = img_tk  # Keep a reference
-            print("Image successfully loaded and displayed.")
-        except Exception as e:
-            print(f"Error loading image from file {image_path}: {e}")
+        random_image_tk = ImageTk.PhotoImage(random_image_resized)
+        self.canvas.create_image(canvas_width // 2, canvas_height // 2, image=random_image_tk, anchor=tk.CENTER)
+        self.active_images = [(random_image_tk, random_image)]  # Store for later reference
+        print("Random header image displayed.")
 
     def display_image_from_url(self, image_url):
         """Download and display the image from a URL on the canvas."""
@@ -913,7 +866,6 @@ class SteamRouletteGUI:
 
         # Select a new game
         self.selected_game = random.choice(self.installed_games)
-        self.label_game_name.config(text=f"Selected Game: {self.selected_game['name']}")
 
         # Display the selected game image (it will be a new one)
         self.display_selected_game()
@@ -922,9 +874,16 @@ class SteamRouletteGUI:
         """Preload all missing images from the cache directory in a separate thread."""
         def preload():
             # Update the label to show "ACTIVE"
-            self.root.after(0, lambda: self.label_preloading.config(text="Preloading: ACTIVE"))
+            self.root(self.label_preloading.config(text="Preloading: ACTIVE"))
 
-            cache_dir = os.path.join(os.path.dirname(resource_path("")), "image_cache")
+            cache_dir = os.path.join(os.path.dirname(sys.executable), "image_cache")
+            # Check if the directory exists, create it if it doesn't
+            if not os.path.exists(cache_dir):
+                os.makedirs(cache_dir)
+                print(f"Cache directory created at: {cache_dir}")
+            else:
+                print(f"Cache directory already exists at: {cache_dir}")
+
             for index, game in enumerate(images_to_display):
                 app_id = game["app_id"]
                 if app_id not in self.preloaded_images:
@@ -950,52 +909,49 @@ class SteamRouletteGUI:
         # Start the preloading process in a separate thread
         threading.Thread(target=preload, daemon=True).start()
 
-    def prepare_images(self, games_to_display):
+    def prepare_images(self, games):
         """Prepare images for the spinning effect, including installed and uninstalled games."""
-        self.active_images = []
-        x_position = 0  # Starting position at the leftmost part of the canvas
+        self.preloaded_images = {}
+        for game in games:
+            app_id = game.get("app_id")
+            if not app_id:
+                continue
+            # Load image for each game and store it in preloaded_images
+            self.preloaded_images[app_id] = fetch_header_image(app_id, self.cache_dir)
+
+        # Ensure self.selected_game is properly initialized
+        if self.selected_game is not None:
+            self.selected_game_image = self.load_image(self.selected_game["app_id"])
+        else:
+            # Handle the case where selected_game is None (e.g., set a placeholder)
+            print("Warning: selected_game is None, using placeholder.")
+            self.selected_game_image = create_placeholder_image("No Game Selected")
+
+        # Clear the canvas before displaying the selected game's image
+        self.canvas.delete("all")  # Clear all existing images from the canvas
+
+        # Display the selected game image (if selected_game is valid)
+        if self.selected_game_image:
+            img_tk = ImageTk.PhotoImage(self.selected_game_image)
+            self.canvas.create_image(self.canvas.winfo_width() // 2, self.canvas.winfo_height() // 2, image=img_tk, anchor=tk.CENTER)
+            self.active_images = [(img_tk, self.selected_game_image)]  # Store the image for animation
         
-        # Ensure the selected game image is properly loaded
-        self.selected_game_image = self.load_image(self.selected_game["app_id"])
-        if self.selected_game_image is None:
-            print(f"Error: No image found for selected game {self.selected_game['name']} (app_id: {self.selected_game['app_id']})")
-            return  # Exit if the selected game image is not found
-
-        # Preload and resize images before animation
-        for game in games_to_display:
-            img = self.load_image(game["app_id"])
-            if img is None:
-                continue  # Skip this game if no image is found
-
-            # Convert to Tkinter-compatible image
-            try:
-                img_tk = ImageTk.PhotoImage(img)
-                image_item = self.canvas.create_image(x_position, 150, image=img_tk, anchor=tk.CENTER)
-                self.active_images.append((image_item, img_tk))  # Add both image and reference to active_images
-                x_position += 600  # Move x_position by the image's width to eliminate padding
-            except Exception as e:
-                print(f"Error processing image for {game['name']} (app_id: {game['app_id']}): {e}")
-                continue  # Skip this game if image processing fails
-
-        # Add the selected game's image at the end of the sequence
-        try:
-            selected_img = self.selected_game_image
-            selected_img_tk = ImageTk.PhotoImage(selected_img)
-            image_item = self.canvas.create_image(x_position, 150, image=selected_img_tk, anchor=tk.CENTER)
-            self.active_images.append((image_item, selected_img_tk))  # Add selected game to the list
-        except Exception as e:
-            print(f"Error processing selected game image: {e}")
-            return  # Exit if selected game image processing fails
-
-        print("Images are preloaded, ready for animation.")
-        self.is_images_preloaded = True
+        print("Image preparation complete.")
 
     def load_image(self, app_id):
         """Load and resize an image, checking the cache if not in preloaded_images."""
         img = self.preloaded_images.get(app_id)
         if img is None:
             # Fallback to load from the cache if not found in preloaded_images
-            cache_dir = os.path.join(os.path.dirname(resource_path("")), "image_cache")
+            cache_dir = os.path.join(os.path.dirname(sys.executable), "image_cache")
+
+            # Check if the directory exists, create it if it doesn't
+            if not os.path.exists(cache_dir):
+                os.makedirs(cache_dir)
+                print(f"Cache directory created at: {cache_dir}")
+            else:
+                print(f"Cache directory already exists at: {cache_dir}")
+
             cache_file_path = os.path.join(cache_dir, f"{app_id}.jpg")
             if os.path.exists(cache_file_path):
                 print(f"Loading image from cache for app_id: {app_id}")
@@ -1013,76 +969,96 @@ class SteamRouletteGUI:
         return img
 
     def cycle_images(self, selected_games):
-        """Cycle through the images as part of the spinning effect, adding the selected game's image at the end."""
+        """Cycle through the images as part of the spinning effect, with no padding and images resized to fit the canvas."""
         self.active_images = []
-        images_to_display = self.installed_games
         self.label_welcome.config(text="Rolling...")
 
-        # Ensure the selected game image is properly loaded
-        self.selected_game_image = self.load_image(self.selected_game["app_id"])
-        if self.selected_game_image is None:
-            print(f"Error: No image found for selected game {self.selected_game['name']} (app_id: {self.selected_game['app_id']})")
-            return  # Exit if the selected game image is not found
+        # Get canvas dimensions
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
 
-        # Preload and resize images before animation
-        x_position = 0  # Starting position at the leftmost part of the canvas
-        for game in images_to_display:
-            img = self.load_image(game["app_id"])
+        # Preload and ensure images for the selected games
+        for game in selected_games:
+            app_id = game["app_id"]
+            img = self.preloaded_images.get(app_id)
             if img is None:
+                # Attempt to load from cache or fallback to placeholder
+                img = fetch_header_image(app_id, self.cache_dir)
+                if img:
+                    self.preloaded_images[app_id] = img
+
+        # Prepare images for animation
+        x_position = 0  # Starting x-coordinate for images on the canvas
+        for game in selected_games:
+            app_id = game["app_id"]
+            img = self.preloaded_images.get(app_id)
+            if img is None:
+                print(f"Error: No image found for game {game['name']} (app_id: {app_id})")
                 continue  # Skip this game if no image is found
 
-            # Convert to Tkinter-compatible image
+            # Resize the image to fit the canvas dimensions
+            img_resized = img.resize((canvas_width, canvas_height), Image.Resampling.LANCZOS)
+
+            # Convert the image to Tkinter-compatible format
             try:
-                img_tk = ImageTk.PhotoImage(img)
-                image_item = self.canvas.create_image(x_position, 150, image=img_tk, anchor=tk.CENTER)
-                self.active_images.append((image_item, img_tk))  # Add both image and reference to active_images
-                x_position += 600  # Move x_position by the image's width to eliminate padding
+                img_tk = ImageTk.PhotoImage(img_resized)
+                image_item = self.canvas.create_image(x_position, canvas_height // 2, image=img_tk, anchor=tk.CENTER)
+                self.active_images.append((image_item, img_tk))  # Keep reference to avoid garbage collection
+                x_position += canvas_width  # No padding between images
             except Exception as e:
-                print(f"Error processing image for {game['name']} (app_id: {game['app_id']}): {e}")
-                continue  # Skip this game if image processing fails
+                print(f"Error processing image for {game['name']} (app_id: {app_id}): {e}")
+                continue
 
         # Add the selected game's image at the end of the sequence
         try:
-            selected_img = self.selected_game_image
-            selected_img_tk = ImageTk.PhotoImage(selected_img)
-            image_item = self.canvas.create_image(x_position, 150, image=selected_img_tk, anchor=tk.CENTER)
+            selected_img = self.preloaded_images.get(self.selected_game["app_id"])
+            if selected_img is None:
+                # Attempt to load if not already preloaded
+                selected_img = fetch_header_image(self.selected_game["app_id"], self.cache_dir)
+                self.preloaded_images[self.selected_game["app_id"]] = selected_img
+
+            selected_img_resized = selected_img.resize((canvas_width, canvas_height), Image.Resampling.LANCZOS)
+            selected_img_tk = ImageTk.PhotoImage(selected_img_resized)
+            image_item = self.canvas.create_image(x_position, canvas_height // 2, image=selected_img_tk, anchor=tk.CENTER)
             self.active_images.append((image_item, selected_img_tk))  # Add selected game to the list
         except Exception as e:
             print(f"Error processing selected game image: {e}")
-            return  # Exit if selected game image processing fails
+            return  # Exit if the selected game's image processing fails
 
         # Start the animation
         self.animate_images()
 
     def animate_images(self):
-        """Animate the images sliding across the canvas."""
+        """Animate the images sliding across the canvas with conditional slowdown."""
         canvas_width = self.canvas.winfo_width()  # Get the width of the canvas
+        include_uninstalled_games = hasattr(self, 'uninstalled_games') and self.uninstalled_games
 
         # Calculate total distance for animation
         total_distance = len(self.active_images) * canvas_width
 
         # Set the desired duration (in milliseconds)
-        desired_duration = 7600  # 7.6 seconds, with slowdown it's 8 seconds
-
-        # Calculate the frame delay or speed dynamically
+        desired_duration = 6800 if include_uninstalled_games else 7400  # 7.4 seconds for animation
         self.frame_delay = 16  # Default frame delay in ms (60 FPS)
         frames = desired_duration // self.frame_delay  # Total number of frames
-        self.animation_speed = max(1, total_distance // frames)  # Pixels per frame
+        self.animation_speed = max(20, total_distance // frames)  # Pixels per frame
 
         def slide():
             # Move all images to the left
             for image_item, img_tk in self.active_images:
                 self.canvas.move(image_item, -self.animation_speed, 0)  # Move images to the left
 
-            # Check if the current image is in the last 10 images
-            for i, (image_item, img_tk) in enumerate(self.active_images[-5:]):  # Last 5 images
+            # Start slowing down earlier if uninstalled games are included
+            slowdown_start_index = -12 if include_uninstalled_games else -4  # Start earlier if uninstalled games are included
+
+            # Check if the current image is in the last 10 images (based on whether uninstalled games are included)
+            for i, (image_item, img_tk) in enumerate(self.active_images[slowdown_start_index:]):  
                 image_x = self.canvas.coords(image_item)[0]  # x-coordinate of the image
                 img_width = self.canvas.bbox(image_item)[2] - self.canvas.bbox(image_item)[0]  # Image width
                 image_left_x = image_x - img_width / 2  # Left edge of the image
 
-                # If the image is within the last 10 images, start slowing down
+                # If the image is near or at the left edge, start slowing down
                 if image_left_x <= 0:  # If the image is near or at the left edge
-                    self.animation_speed = max(5, self.animation_speed * 0.98)  # Gradually slow down the speed
+                    self.animation_speed = max(5, self.animation_speed * 0.95)  # Gradually slow down the speed
 
             # Get the x-coordinate of the top-left corner of the last image
             last_image_x = self.canvas.coords(self.active_images[-1][0])[0]  # x-coordinate of the last image
@@ -1133,28 +1109,28 @@ class SteamRouletteGUI:
         # Optionally, update the UI with a label displaying the number of games selected
         self.label_game_name.config(text=f"{len(selected_games)} Games Selected")
 
-    # Dynamically adjust both speed and frame delay
-    def setup_animation(self):
-        canvas_width = self.canvas.winfo_width()
-        total_distance = len(self.active_images) * canvas_width
-        desired_duration = 8000  # 8 seconds in milliseconds
-
-        # Adjust frame delay or animation speed dynamically
-        self.frame_delay = max(1, 16)  # Default to 60 FPS if possible
-        frames = desired_duration // self.frame_delay
-        self.animation_speed = max(1, total_distance // frames)
-
     def display_selected_game(self):
-        """Display the selected game's header image after animation."""
-        self.label_game_name.config(text=f"{self.selected_game['name']}")
-        self.label_welcome.config(text="Done!")
-
-        img = self.preloaded_images.get(self.selected_game["app_id"])
-        if img:
-            img_resized = img.resize((600, 300), Image.Resampling.LANCZOS)
-            img_tk = ImageTk.PhotoImage(img_resized)
-            self.selected_game_item = self.canvas.create_image(300, 150, image=img_tk, anchor=tk.CENTER)
-            self.canvas.image = img_tk  # Keep a reference to prevent garbage collection
+        """Display the selected game image after the spin."""
+        if self.selected_game is not None:
+            app_id = self.selected_game["app_id"]
+            self.selected_game_image = self.load_image(app_id)
+            self.label_welcome.config(text="Done!")
+            self.label_game_name.config(text=f"{self.selected_game['name']}")
+            self.label_welcome.config(text="Done!")
+            
+            # Resize the selected game image to match the canvas size
+            canvas_width = self.canvas.winfo_width()
+            canvas_height = self.canvas.winfo_height()
+            selected_image_resized = self.selected_game_image.resize((canvas_width, canvas_height), Image.Resampling.LANCZOS)
+            
+            # Clear the canvas before displaying the selected game's image
+            self.canvas.delete("all")
+            
+            # Display the selected game image
+            img_tk = ImageTk.PhotoImage(selected_image_resized)
+            self.canvas.create_image(canvas_width // 2, canvas_height // 2, image=img_tk, anchor=tk.CENTER)
+            self.active_images = [(img_tk, selected_image_resized)]  # Store for later reference
+            print(f"Displaying selected game image: {self.selected_game['name']}")
 
         # Re-enable buttons
         self.button_spin.config(state=tk.NORMAL, text="Re-Roll")
@@ -1162,7 +1138,7 @@ class SteamRouletteGUI:
         self.button_store.config(state=tk.NORMAL)
 
     def launch_game(self):
-        """Launch the selected game."""
+        """Launch the selected game using Steam."""
         webbrowser.open(f"steam://run/{self.selected_game['app_id']}")
 
     def open_store(self):
@@ -1176,6 +1152,9 @@ def main():
         print("Steam installation not found.")
         return
 
+    # Ensure the cache directory exists
+    cache_dir = create_cache_directory()
+
     games = get_installed_games(steam_path)
     drives = get_drives()
     if not games:
@@ -1184,6 +1163,7 @@ def main():
 
     root = tk.Tk()
     app = SteamRouletteGUI(root, games, drives)
+    app.cache_dir = cache_dir  # Pass the cache directory to the GUI class
     root.mainloop()
 
 if __name__ == "__main__":
