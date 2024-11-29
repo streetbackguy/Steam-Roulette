@@ -36,7 +36,7 @@ To get your Steam API Key, visit https://steamcommunity.com/dev/apikey and login
 - Preloads Steam game header images to a cache so you won't have to fetch them through the Steam API each time.
 - Feature to now include games you own that are not installed in the spin list
 
-![image](https://github.com/user-attachments/assets/493f27ac-49e3-4c13-8117-7364d8930fb8)
+![image](https://github.com/user-attachments/assets/8b1cc828-6e61-4fcf-8ae4-3444438bea93)
 
 # To-Do
 - Find a permanent way to calculate installation size for each game on each separate drive
