@@ -432,34 +432,26 @@ class SteamRouletteGUI:
 
         # Create a container frame to hold the button and label
         self.frame_controls = tk.Frame(self.root)
-        self.frame_controls.place(anchor='w', x=4, y=625)
+        self.frame_controls.place(anchor='w', x=4, y=645)
 
         # Configure columns for centering
         for col in range(3):  # Assuming a grid with 3 columns for flexibility
             self.frame_controls.grid_columnconfigure(col, weight=1)
 
         # Add a button that triggers the popup to input the number of games
-        self.button_set_number_of_games = tk.Button(
-            self.frame_controls, text="Set Number of Games", command=self.set_number_of_games
-        )
+        self.button_set_number_of_games = tk.Button(self.frame_controls, text="Set Number of Games", command=self.set_number_of_games)
         self.button_set_number_of_games.grid(row=0, column=1, pady=2)  # Centered in row 0, column 1
 
         # Label to show the number of games selected (initially empty)
-        self.label_number_of_games = tk.Label(
-            self.frame_controls, text="Number of games to spin:\nAll Games", font=("Arial", 8)
-        )
+        self.label_number_of_games = tk.Label(self.frame_controls, text="Number of games to spin:\nAll Games", font=("Arial", 8))
         self.label_number_of_games.grid(row=1, column=1, pady=2)  # Centered in row 1, column 1
 
         # Exclude Games Button
-        self.button_exclude = tk.Button(
-            self.frame_controls, text="Exclude Games", command=self.exclude_games, font=("Arial", 10)
-        )
+        self.button_exclude = tk.Button(self.frame_controls, text="Exclude Games", command=self.exclude_games, font=("Arial", 10))
         self.button_exclude.grid(row=2, column=1, pady=2)  # Centered in row 2, column 1
 
         # Excluded Games Count Label
-        self.excluded_label = tk.Label(
-            self.frame_controls, text=f"Excluded Games:\n{len(self.excluded_games)}", font=("Arial", 8)
-        )
+        self.excluded_label = tk.Label(self.frame_controls, text=f"Excluded Games:\n{len(self.excluded_games)}", font=("Arial", 8))
         self.excluded_label.grid(row=3, column=1, pady=2)  # Centered in row 3, column 1
 
         # Create a frame to contain the game name label and other elements
