@@ -35,8 +35,9 @@ To get your Steam API Key, visit https://steamcommunity.com/dev/apikey and login
 - Now an ability to switch between a light and dark theme, depending on your preferences.
 - Preloads Steam game header images to a cache so you won't have to fetch them through the Steam API each time.
 - Feature to now include games you own that are not installed in the spin list
+- Exclude games/items you don't want to be included in the spin
 
-![image](https://github.com/user-attachments/assets/8b1cc828-6e61-4fcf-8ae4-3444438bea93)
+![image](https://github.com/user-attachments/assets/d02307aa-a84d-4a59-a211-a173c4949b26)
 
 # To-Do
 - Find a permanent way to calculate installation size for each game on each separate drive
