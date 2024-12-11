@@ -5,9 +5,10 @@ import platform
 import webbrowser
 import requests
 import tkinter as tk
-from tkinter import simpledialog, messagebox, simpledialog
+from tkinter import messagebox
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 from io import BytesIO
+import json
 import vdf
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -287,6 +288,8 @@ class SteamRouletteGUI:
     def __init__(self, root, installed_games, drives):
         self.root = root
         self.installed_games = installed_games
+        self.excluded_games = []
+        self.uninstalled_games = []
         self.selected_game = None
         self.drives = drives
         self.api_key = self.load_api_key()
@@ -302,6 +305,8 @@ class SteamRouletteGUI:
         self.preloaded_images = {}
         # Preload Header Images
         self.preload_images()
+        # Load saved Game Exclusions
+        self.load_exclusions()
 
         self.canvas_frame = tk.Frame(root, bg=self.light_mode_bg)
         self.canvas_frame.pack(pady=5)
@@ -328,8 +333,20 @@ class SteamRouletteGUI:
         self.frame_delay = 16  # Controls the speed of the animation (time between frames)
 
         self.root.title("Steam Roulette")
-        self.root.geometry("600x750")
+        width = 600
+        height = 750
+
+        # get screen width and height
+        ws = root.winfo_screenwidth()
+        hs = root.winfo_screenheight()
+
+        # calculate x and y coordinates for the Tk root window
+        x = (ws/2) - (width/2)
+        y = (hs/2) - (height/2)
+
+        self.root.geometry('%dx%d+%d+%d' % (width, height, x, y))
         self.root.resizable(False, False)
+        
 
         # Define the relative path to the 'header_images' folder
         self.header_images_folder = os.path.join((sys.executable), "image_cache")
@@ -374,15 +391,15 @@ class SteamRouletteGUI:
         self.button_frame.place(relx=0.0, rely=1.0, anchor='sw', x=2, y=-2)  # Padding for the frame
 
         # Button to set the API Key
-        self.button_set_api_key = tk.Button(self.button_frame, text="Set API Key", command=self.set_api_key, state=tk.NORMAL, font=("Arial", 12))
+        self.button_set_api_key = tk.Button(self.button_frame, text="Set API Key", command=self.set_api_key, state=tk.NORMAL, font=("Arial", 10))
         self.button_set_api_key.grid(row=0, column=0, pady=2, padx=2)
 
         # Create a button to set the Steam User ID manually
-        self.button_set_user_id = tk.Button(self.button_frame, text="Set Steam User ID", command=self.set_user_id_key, state=tk.NORMAL, font=("Arial", 12))
+        self.button_set_user_id = tk.Button(self.button_frame, text="Set Steam User ID", command=self.set_user_id_key, state=tk.NORMAL, font=("Arial", 10))
         self.button_set_user_id.grid(row=0, column=1, pady=2, padx=2)
 
         # Button to toggle dark mode
-        self.button_toggle_theme = tk.Button(self.button_frame, text="Toggle Dark Mode", command=self.toggle_theme, font=("Arial", 12))
+        self.button_toggle_theme = tk.Button(self.button_frame, text="Toggle Dark Mode", command=self.toggle_theme, font=("Arial", 10))
         self.button_toggle_theme.grid(row=0, column=2, pady=2, padx=2)
 
         try:
@@ -417,13 +434,33 @@ class SteamRouletteGUI:
         self.frame_controls = tk.Frame(self.root)
         self.frame_controls.place(anchor='w', x=4, y=625)
 
+        # Configure columns for centering
+        for col in range(3):  # Assuming a grid with 3 columns for flexibility
+            self.frame_controls.grid_columnconfigure(col, weight=1)
+
         # Add a button that triggers the popup to input the number of games
-        self.button_set_number_of_games = tk.Button(self.frame_controls, text="Set Number of Games", command=self.set_number_of_games)
-        self.button_set_number_of_games.grid(row=0, column=0, sticky='w')  # Positioned within the frame
+        self.button_set_number_of_games = tk.Button(
+            self.frame_controls, text="Set Number of Games", command=self.set_number_of_games
+        )
+        self.button_set_number_of_games.grid(row=0, column=1, pady=2)  # Centered in row 0, column 1
 
         # Label to show the number of games selected (initially empty)
-        self.label_number_of_games = tk.Label(self.frame_controls, text="Number of games:\nAll Games", font=("Arial", 8))
-        self.label_number_of_games.grid(row=1, column=0, sticky='w', padx=18)
+        self.label_number_of_games = tk.Label(
+            self.frame_controls, text="Number of games to spin:\nAll Games", font=("Arial", 8)
+        )
+        self.label_number_of_games.grid(row=1, column=1, pady=2)  # Centered in row 1, column 1
+
+        # Exclude Games Button
+        self.button_exclude = tk.Button(
+            self.frame_controls, text="Exclude Games", command=self.exclude_games, font=("Arial", 10)
+        )
+        self.button_exclude.grid(row=2, column=1, pady=2)  # Centered in row 2, column 1
+
+        # Excluded Games Count Label
+        self.excluded_label = tk.Label(
+            self.frame_controls, text=f"Excluded Games:\n{len(self.excluded_games)}", font=("Arial", 8)
+        )
+        self.excluded_label.grid(row=3, column=1, pady=2)  # Centered in row 3, column 1
 
         # Create a frame to contain the game name label and other elements
         self.yes_no_frame = tk.Frame(self.root, bg=self.light_mode_bg)
@@ -528,14 +565,44 @@ class SteamRouletteGUI:
 
     def set_api_key(self):
         """Prompt user for an API key and save it to a file in the current directory."""
-        api_key = simpledialog.askstring("Enter API Key", "Please enter your Steam API Key:")
-        if api_key:
-            with open("apikey.txt", "w") as file:
-                file.write(api_key)
-            self.api_key = api_key
-            messagebox.showinfo("API Key", "API Key saved successfully.")
-        else:
-            messagebox.showerror("Error", "API Key not entered.")
+        bg_color = self.dark_mode_bg if self.is_dark_mode else self.light_mode_bg
+        fg_color = self.dark_mode_fg if self.is_dark_mode else self.light_mode_fg
+
+        api_key_popup = tk.Toplevel(self.root)
+        api_key_popup.title("Enter API Key")
+        
+        width = 350
+        height = 150
+
+        hs = api_key_popup.winfo_screenheight()
+        ws = api_key_popup.winfo_screenwidth()
+
+        x = (ws/6) - (width/10)
+        y = (hs/5) - (height/5)
+
+        api_key_popup.geometry('%dx%d+%d+%d' % (width, height, x, y))
+
+        self.update_theme(api_key_popup, bg_color, fg_color)
+
+        label = tk.Label(api_key_popup, text="Please enter your Steam API Key:", bg=bg_color, fg=fg_color)
+        label.pack(pady=10)
+
+        entry = tk.Entry(api_key_popup, bg=bg_color, fg=fg_color)
+        entry.pack(pady=5)
+
+        def submit():
+            api_key = entry.get()
+            if api_key:
+                with open("apikey.txt", "w") as file:
+                    file.write(api_key)
+                self.api_key = api_key
+                messagebox.showinfo("API Key", "API Key saved successfully.")
+                api_key_popup.destroy()
+            else:
+                messagebox.showerror("Error", "API Key not entered.")
+
+        submit_button = tk.Button(api_key_popup, text="Submit", command=submit, bg=bg_color, fg=fg_color)
+        submit_button.pack(pady=10)
 
     def fetch_steam_user_id(self, api_key, steam_id):
         """Fetch Steam User ID automatically using the Steam API."""
@@ -574,16 +641,43 @@ class SteamRouletteGUI:
 
     def set_user_id_key(self):
         """Prompt the user for a Steam User ID and save it to a file."""
-        steam_user_id = tk.simpledialog.askstring("Enter Steam User ID", "Please enter your Steam User ID:")
+        bg_color = self.dark_mode_bg if self.is_dark_mode else self.light_mode_bg
+        fg_color = self.dark_mode_fg if self.is_dark_mode else self.light_mode_fg
+
+        user_id_popup = tk.Toplevel(self.root)
+        user_id_popup.title("Enter Steam User ID")
         
-        if steam_user_id:
-            # Save the user ID to a file (so it can be reused automatically later)
-            with open("steamuserid.txt", "w") as file:
-                file.write(steam_user_id)
-            print(f"Steam User ID {steam_user_id} saved successfully.")
-            messagebox.showinfo("Success", "Steam User ID saved successfully.")
-        else:
-            messagebox.showerror("Error", "Steam User ID not entered.")
+        width = 350
+        height = 150
+
+        hs = user_id_popup.winfo_screenheight()
+        ws = user_id_popup.winfo_screenwidth()
+
+        x = (ws/6) - (width/10)
+        y = (hs/5) - (height/5)
+
+        user_id_popup.geometry('%dx%d+%d+%d' % (width, height, x, y))
+
+        self.update_theme(user_id_popup, bg_color, fg_color)
+
+        label = tk.Label(user_id_popup, text="Please enter your Steam User ID:", bg=bg_color, fg=fg_color)
+        label.pack(pady=10)
+
+        entry = tk.Entry(user_id_popup, bg=bg_color, fg=fg_color)
+        entry.pack(pady=5)
+
+        def submit():
+            steam_user_id = entry.get()
+            if steam_user_id:
+                with open("steamuserid.txt", "w") as file:
+                    file.write(steam_user_id)
+                messagebox.showinfo("Success", "Steam User ID saved successfully.")
+                user_id_popup.destroy()
+            else:
+                messagebox.showerror("Error", "Steam User ID not entered.")
+
+        submit_button = tk.Button(user_id_popup, text="Submit", command=submit, bg=bg_color, fg=fg_color)
+        submit_button.pack(pady=10)
 
     def load_header_images(self, folder_path):
         """Load all image files from the specified folder."""
@@ -632,14 +726,10 @@ class SteamRouletteGUI:
             return
 
         # Map 'appid' to 'app_id' for uninstalled games
-        uninstalled_games = [
-            {**game, "app_id": str(game["appid"])} for game in all_games if "appid" in game
-        ]
+        uninstalled_games = [{**game, "app_id": str(game["appid"])} for game in all_games if "appid" in game]
 
         installed_ids = {game["app_id"] for game in self.installed_games}
-        new_uninstalled_games = [
-            game for game in uninstalled_games if game["app_id"] not in installed_ids
-        ]
+        new_uninstalled_games = [game for game in uninstalled_games if game["app_id"] not in installed_ids]
 
         if new_uninstalled_games:
             # Add uninstalled games to the list
@@ -809,21 +899,35 @@ class SteamRouletteGUI:
 
     def set_number_of_games(self):
         """Popup window to ask user for how many games to spin between."""
-        # Create a new Toplevel window for input
+        bg_color = self.dark_mode_bg if self.is_dark_mode else self.light_mode_bg
+        fg_color = self.dark_mode_fg if self.is_dark_mode else self.light_mode_fg
+
         self.popup = tk.Toplevel(self.root)
         self.popup.title("Select Number of Games")
-        self.popup.geometry("300x150")
+
+        width = 350
+        height = 150
+
+        hs = self.popup.winfo_screenheight()
+        ws = self.popup.winfo_screenwidth()
+
+        x = (ws/6) - (width/10)
+        y = (hs/5) - (height/5)
+
+        self.popup.geometry('%dx%d+%d+%d' % (width, height, x, y))
+
+        self.update_theme(self.popup, bg_color, fg_color)
 
         # Label to guide the user
-        label = tk.Label(self.popup, text="Enter number of games to spin:")
+        label = tk.Label(self.popup, text="Enter number of games to spin:", bg=bg_color, fg=fg_color)
         label.pack(pady=10)
 
         # Entry widget to accept input
-        self.num_games_entry = tk.Entry(self.popup)
+        self.num_games_entry = tk.Entry(self.popup, bg=bg_color, fg=fg_color)
         self.num_games_entry.pack(pady=5)
 
         # Submit button to get the value from the entry box
-        submit_button = tk.Button(self.popup, text="Submit", command=self.submit_number_of_games)
+        submit_button = tk.Button(self.popup, text="Submit", command=self.submit_number_of_games, bg=bg_color, fg=fg_color)
         submit_button.pack(pady=10)
 
     def submit_number_of_games(self):
@@ -850,8 +954,165 @@ class SteamRouletteGUI:
 
         except ValueError as e:
             # If input is invalid, show an error message
-            error_label = tk.Label(self.popup, text=f"Error: {e}", fg="red")
+            error_label = tk.Label(self.popup, text=f"Error: {e}", fg="red", bg=self.dark_mode_bg if self.is_dark_mode else self.light_mode_bg)
             error_label.pack()
+
+    def clear_exclusions(self):
+        """Clear all exclusions and restore excluded games to the installed list."""
+        print(f"Before clearing exclusions:\nExcluded: {self.excluded_games}\nInstalled: {[game['name'] for game in self.installed_games]}")
+
+        # Restore the excluded games back into installed_games
+        for game_id in self.excluded_games:
+            # Find the game by app_id in installed games
+            restored_game = next(
+                (game for game in self.installed_games if game["app_id"] == game_id), 
+                None
+            )
+            
+            if restored_game:
+                print(f"Restoring game: {restored_game['name']} to installed games.")
+            else:
+                print(f"Could not restore game with ID {game_id}, it might already be in installed games.")
+
+        # Clear exclusions after restoring
+        self.excluded_games = []
+
+        # Update the UI
+        self.excluded_label.config(text=f"Excluded Games:\n{len(self.excluded_games)}")
+
+        # Print for verification
+        print(f"After clearing exclusions:\nExcluded: {self.excluded_games}\nInstalled: {[game['name'] for game in self.installed_games]}")
+
+        self.exclude_games()  # Rebuild the checklist
+        self.save_exclusions()
+        
+        # Notify the user
+        messagebox.showinfo("Clear Exclusions", "All exclusions have been cleared and games re-added to the checklist.")
+
+    def exclude_games(self):
+        """Open a new window to allow users to select games to exclude, with search functionality."""
+        if hasattr(self, "exclude_popup") and self.exclude_popup.winfo_exists():
+            self.exclude_popup.lift()  # Bring the existing popup to the front
+            return
+
+        self.exclude_popup = tk.Toplevel(self.root)
+        self.exclude_popup.title("Exclude Games")
+
+        width = 600
+        height = 500
+
+        hs = self.exclude_popup.winfo_screenheight()
+        ws = self.exclude_popup.winfo_screenwidth()
+
+        x = (ws/24) - (width/24)
+        y = (hs/3) - (height/3)
+
+        self.exclude_popup.geometry('%dx%d+%d+%d' % (width, height, x, y))
+        self.exclude_popup.resizable(False, False)
+
+        # Apply dark mode if enabled
+        bg_color = self.dark_mode_bg if self.is_dark_mode else self.light_mode_bg
+        fg_color = self.dark_mode_fg if self.is_dark_mode else self.light_mode_fg
+        self.update_theme(self.exclude_popup, bg_color, fg_color)
+
+        # Adding mouse wheel scroll functionality
+        def on_mouse_wheel(event):
+            """Scroll the canvas when mouse wheel is used."""
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")  # Adjust scroll amount
+
+        # Create a search input box at the top
+        search_label = tk.Label(self.exclude_popup, text="Search:", bg=bg_color, fg=fg_color, font="12")
+        search_label.pack(pady=2, padx=2)
+        
+        search_var = tk.StringVar()
+        search_entry = tk.Entry(self.exclude_popup, textvariable=search_var, bg=bg_color, fg=fg_color, font="12")
+        search_entry.pack(pady=6, padx=2)
+
+        def update_search_results(*args):
+            """Update the checklist dynamically based on the search input."""
+            search_text = search_var.get().lower()
+            
+            # Clear the current game list
+            for widget in scrollable_frame.winfo_children():
+                widget.destroy()
+
+            # Filter the games based on the search text
+            filtered_games = [game for game in sorted_games if search_text in game["name"].lower()]
+            
+            # Create checkboxes for filtered games
+            for game in filtered_games:
+                var = tk.BooleanVar(value=game["app_id"] in self.excluded_games)  # Ensure checkbox reflects exclusion
+                cb = tk.Checkbutton(scrollable_frame, text=game["name"], variable=var, bg=bg_color, fg=fg_color, selectcolor=bg_color, font="12")
+                cb.pack(anchor="w")
+                game_vars[game["app_id"]] = var
+        
+        # Bind the search input to the update function
+        search_var.trace_add("write", update_search_results)
+
+        # Scrollable frame for the list of games
+        canvas = tk.Canvas(self.exclude_popup, bg=bg_color, bd=0, highlightthickness=0)
+        scrollable_frame = tk.Frame(canvas, bg=bg_color)
+        scrollbar = tk.Scrollbar(self.exclude_popup, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.bind_all("<MouseWheel>", on_mouse_wheel)  # Windows and Mac mouse wheel scroll
+
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True, padx= 4)
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        scrollable_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+
+        # Get installed games to populate the exclude list
+        all_games = self.installed_games  # Use the installed_games as the base
+        sorted_games = sorted(all_games, key=lambda game: game["name"].lower())
+
+        # Log for debugging
+        print(f"Populating exclude list with games: {[game['name'] for game in sorted_games]}")
+
+        # Initialize the game vars dictionary for checkboxes
+        game_vars = {}
+
+        # Initially populate with all games
+        for game in sorted_games:
+            var = tk.BooleanVar(value=game["app_id"] in self.excluded_games)  # Ensure checkbox reflects exclusion
+            cb = tk.Checkbutton(scrollable_frame, text=game["name"], variable=var, bg=bg_color, fg=fg_color, selectcolor=bg_color, font="12")
+            cb.pack(anchor="w")
+            game_vars[game["app_id"]] = var
+
+        def apply_exclusions():
+            """Apply the exclusions and update the list of excluded games."""
+            self.excluded_games = [app_id for app_id, var in game_vars.items() if var.get()]
+            self.excluded_label.config(text=f"Excluded Games:\n{len(self.excluded_games)}")
+            self.save_exclusions()
+            messagebox.showinfo("Exclusions Applied", f"Excluded {len(self.excluded_games)} games.")
+            self.exclude_games()
+
+        # Apply button
+        apply_button = tk.Button(self.exclude_popup, text="Apply", command=apply_exclusions, bg=bg_color, fg=fg_color, font="12")
+        apply_button.pack(pady=4, padx=4)
+
+        # Clear exclusions button
+        clear_button = tk.Button(self.exclude_popup, text="Clear", command=self.clear_exclusions, bg=bg_color, fg=fg_color, font="12")
+        clear_button.pack(pady=4, padx=4)
+
+    def load_exclusions(self):
+        """Load exclusions from a file."""
+        if os.path.exists("excluded_games.json"):
+            try:
+                with open("excluded_games.json", "r") as file:
+                    excluded_game_ids = json.load(file)
+                    self.excluded_games = excluded_game_ids
+                    print(f"Loaded exclusions: {self.excluded_games}")
+            except Exception as e:
+                print(f"Error loading exclusions: {e}")
+
+    def save_exclusions(self):
+        """Save exclusions to a file."""
+        try:
+            with open("excluded_games.json", "w") as file:
+                json.dump(self.excluded_games, file)
+                print(f"Saved exclusions: {self.excluded_games}")
+        except Exception as e:
+            print(f"Error saving exclusions: {e}")
 
     def spin_wheel(self):
         """Start the spinning animation based on the selected number of games."""
@@ -860,8 +1121,8 @@ class SteamRouletteGUI:
         else:
             num_games_to_spin = self.selected_num_games  # Use user-specified count
 
-        # Filter games with valid app_id
-        valid_games = [game for game in self.installed_games if "app_id" in game]
+        # Filter games with valid app_id and exclude the ones that are in excluded_games
+        valid_games = [game for game in self.installed_games if "app_id" in game and game["app_id"] not in self.excluded_games]
         if not valid_games:
             print("Error: No valid games found to spin.")
             return
