@@ -41,3 +41,9 @@ To get your Steam API Key, visit https://steamcommunity.com/dev/apikey and login
 
 # To-Do
 - Find a permanent way to calculate installation size for each game on each separate drive
+
+# Virus Scan
+
+https://www.virustotal.com/gui/file/6a9d2c759fed98b6d885036ccd4cfe7fe7510d997bc41aa764d5f88ade0ae29e/detection
+
+The release version does seem to flag up as a Trojan according to a few antivirus software, but rest assured that this application is safe, and all the source code is visible in this repo, so consider them nothing more than false positives.
