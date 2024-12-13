@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 import time
 import winreg
 import threading
+from functools import lru_cache
 
 def create_cache_directory():
     """Ensure the cache directory exists."""
@@ -84,6 +85,7 @@ def parse_vdf(file_path):
         print(f"Error parsing VDF file: {e}")
         return {}
 
+@lru_cache(maxsize=None)
 def fetch_game_data(acf_path, library_path):
     """Extract game data from an ACF file and include the library path."""
     try:
@@ -99,6 +101,7 @@ def fetch_game_data(acf_path, library_path):
         print(f"Error reading ACF file {acf_path}: {e}")
         return {}
 
+@lru_cache(maxsize=1000)
 def fetch_header_image(app_id, cache_dir, timeout=10):
     """Fetch game header image from Steam or return a placeholder."""
     cache_file_path = os.path.join(cache_dir, f"{app_id}.jpg")
@@ -458,17 +461,19 @@ class SteamRouletteGUI:
         self.yes_no_frame = tk.Frame(self.root, bg=self.light_mode_bg)
         self.yes_no_frame.place(relx=1.0, rely=1.0, anchor='se', x=-2, y=-2)  # Padding for the frame
 
-        # Label for Selecting whether to include uninstalled games or not
-        self.label_include_uninstalled_games = tk.Label(self.yes_no_frame, text="Include Uninstalled Games?", font=("Arial", 8))
-        self.label_include_uninstalled_games.grid(row=0, column=0, columnspan=2, pady=2)
+        # Label to advise waiting when loading
+        self.please_wait_label = tk.Label(self.yes_no_frame, text="", font="6")
+        self.please_wait_label.grid(row=0)
 
-        # Yes button
-        self.button_yes = tk.Button(self.yes_no_frame, text="Yes", command=self.on_yes_click)
-        self.button_yes.grid(row=1, column=0, pady=2, padx=2)
-        
-        # No button
-        self.button_no = tk.Button(self.yes_no_frame, text="No", command=self.on_no_click)
-        self.button_no.grid(row=1, column=1, pady=2, padx=2)
+        # Checkbox to include/exclude uninstalled games
+        self.include_uninstalled_var = tk.BooleanVar(value=False)
+        self.include_uninstalled_checkbox = tk.Checkbutton(self.yes_no_frame,text="Include Uninstalled Games",variable=self.include_uninstalled_var,command=self.toggle_uninstalled_games,bg=self.light_mode_bg,fg=self.light_mode_fg,selectcolor=self.light_mode_bg)
+        self.include_uninstalled_checkbox.grid(sticky="w", row=1)
+
+        # Add checkbox for filtering 100% achievement games
+        self.filter_achievements_var = tk.BooleanVar(value=False)
+        self.filter_achievements_checkbox = tk.Checkbutton(self.yes_no_frame,text="Exclude 100% Achieved Games",variable=self.filter_achievements_var,command=self.toggle_achievement_filter,bg=self.light_mode_bg,fg=self.light_mode_fg,selectcolor=self.light_mode_bg)
+        self.filter_achievements_checkbox.grid(sticky="w", row=2)
 
         self.active_images = []
         self.selected_game_image = None
@@ -694,54 +699,190 @@ class SteamRouletteGUI:
         self.button_spin.config(state=tk.NORMAL, text="Spin the Wheel")
         print("Uninstalled games images have been loaded.")
 
-    def on_yes_click(self):
-        """Include uninstalled games in the cycle list and preload their images."""
-        if not self.api_key:
-            messagebox.showerror("Error", "Please set your Steam API key first.")
-            return
-
-        # Disable the Spin button while loading images
-        self.button_spin.config(state=tk.DISABLED, text="Loading...")
-
-        user_id = self.load_user_id_key()
-        if not user_id:
-            user_id = self.fetch_steam_user_id(self.api_key, "Your Placeholder SteamID")
-            if user_id:
-                self.save_user_id_key(user_id)
-            else:
-                messagebox.showerror("Error", "Could not fetch Steam User ID.")
+    def toggle_uninstalled_games(self):
+        """Toggle inclusion of uninstalled games based on checkbox state."""
+        if self.include_uninstalled_var.get():  # Checkbox is checked
+            if not self.api_key:
+                messagebox.showerror("Error", "Please set your Steam API key first.")
+                self.include_uninstalled_var.set(False)  # Uncheck the box
                 return
 
-        all_games = get_all_games(self.api_key, user_id)
-        if not all_games:
-            messagebox.showerror("Error", "No games were fetched from the Steam API.")
-            return
+            # Disable the Spin button while loading images
+            self.button_spin.config(state=tk.DISABLED, text="Loading...")
+            self.include_uninstalled_checkbox.config(state=tk.DISABLED)
+            self.filter_achievements_checkbox.config(state=tk.DISABLED)
+            self.please_wait_label.config(text=f"Please Wait...")
 
-        # Map 'appid' to 'app_id' for uninstalled games
-        uninstalled_games = [{**game, "app_id": str(game["appid"])} for game in all_games if "appid" in game]
+            user_id = self.load_user_id_key()
+            if not user_id:
+                user_id = self.fetch_steam_user_id(self.api_key, "Your Placeholder SteamID")
+                if user_id:
+                    self.save_user_id_key(user_id)
+                else:
+                    messagebox.showerror("Error", "Could not fetch Steam User ID.")
+                    self.include_uninstalled_var.set(False)  # Uncheck the box
+                    return
 
-        installed_ids = {game["app_id"] for game in self.installed_games}
-        new_uninstalled_games = [game for game in uninstalled_games if game["app_id"] not in installed_ids]
+            all_games = get_all_games(self.api_key, user_id)
+            if not all_games:
+                messagebox.showerror("Error", "No games were fetched from the Steam API.")
+                self.include_uninstalled_var.set(False)  # Uncheck the box
+                return
 
-        if new_uninstalled_games:
-            # Add uninstalled games to the list
-            self.uninstalled_games = new_uninstalled_games
-            self.installed_games.extend(new_uninstalled_games)
+            # Map 'appid' to 'app_id' for uninstalled games
+            uninstalled_games = [{**game, "app_id": str(game["appid"])} for game in all_games if "appid" in game]
 
-            # Load images for uninstalled games asynchronously
-            threading.Thread(target=self.load_images_in_parallel, daemon=True).start()
+            installed_ids = {game["app_id"] for game in self.installed_games}
+            new_uninstalled_games = [game for game in uninstalled_games if game["app_id"] not in installed_ids]
 
-            messagebox.showinfo("Uninstalled Games Added", f"Included {len(new_uninstalled_games)} uninstalled games.")
+            if new_uninstalled_games:
+                # Add uninstalled games to the list
+                self.uninstalled_games = new_uninstalled_games
+                self.installed_games.extend(new_uninstalled_games)
+
+                # Apply the 100% achievement filter
+                if self.filter_achievements_var.get():  # Check if the filter is enabled
+                    self.exclude_achievement_games()
+
+                # Load images for uninstalled games asynchronously
+                threading.Thread(target=self.load_images_in_parallel, daemon=True).start()
+
+                messagebox.showinfo("Uninstalled Games Added", f"Included {len(new_uninstalled_games)} uninstalled games.")
+            else:
+                messagebox.showinfo("No Uninstalled Games", "No uninstalled games were found to include.")
+
+        else:  # Checkbox is unchecked
+            if hasattr(self, 'uninstalled_games'):
+                uninstalled_ids = {game["app_id"] for game in self.uninstalled_games}
+                self.installed_games = [game for game in self.installed_games if game["app_id"] not in uninstalled_ids]
+                del self.uninstalled_games  # Clear the uninstalled games list
+                messagebox.showinfo("Uninstalled Games Removed", "Uninstalled games have been removed from the cycle.")
+
+    def toggle_achievement_filter(self):
+        """Filter or unfilter 100% achievement games based on the checkbox state."""
+        # Disable the checkbox temporarily to prevent multiple clicks
+        self.include_uninstalled_checkbox.config(state=tk.DISABLED)
+        self.filter_achievements_checkbox.config(state=tk.DISABLED)
+        self.button_spin.config(state=tk.DISABLED)
+        self.please_wait_label.config(text=f"Please Wait...")
+
+        if self.filter_achievements_var.get():
+            # Run the filtering logic in a background thread
+            threading.Thread(target=self.exclude_achievement_games_in_background, daemon=True).start()
         else:
-            messagebox.showinfo("No Uninstalled Games", "No uninstalled games were found to include.")
+            # Run the reinclusion logic in a background thread
+            threading.Thread(target=self.include_achievement_games_in_background, daemon=True).start()
 
-    def on_no_click(self):
-        """Remove uninstalled games from the cycle list."""
-        if hasattr(self, 'uninstalled_games'):
-            uninstalled_ids = {game["app_id"] for game in self.uninstalled_games}
-            self.installed_games = [game for game in self.installed_games if game["app_id"] not in uninstalled_ids]
-            del self.uninstalled_games  # Clear the uninstalled games list
-            messagebox.showinfo("Uninstalled Games Removed", "Uninstalled games have been removed from the cycle.")
+        # Update the UI to reflect exclusions
+        self.excluded_label.config(text=f"Excluded Games:\n{len(self.excluded_games)}")
+        self.save_exclusions()
+
+    def exclude_achievement_games(self):
+        """Add games with 100% achievements to the excluded list."""
+        for game_list in [self.installed_games, getattr(self, 'uninstalled_games', [])]:
+            for game in game_list:
+                app_id = game["app_id"]
+                if not self.supports_achievements(app_id):
+                    print(f"Game {game['name']} (app_id: {app_id}) does not support achievements.")
+                    continue
+
+                achievement_progress = self.get_achievement_progress(app_id)
+                if achievement_progress["unlocked"] == achievement_progress["total"] > 0:
+                    if app_id not in self.excluded_games:
+                        self.excluded_games.append(app_id)
+
+    def exclude_achievement_games_in_background(self):
+        """Exclude 100% achievement games in the background."""
+        self.exclude_achievement_games()  # Call the existing method to filter achievements
+
+        # Re-enable the checkbox after the operation is completed
+        self.root.after(0, self.enable_checkbox)
+
+    def include_achievement_games_in_background(self):
+        """Include all achievement games in the background."""
+        self.include_achievement_games()  # Call the existing method to include all games
+
+        # Re-enable the checkbox after the operation is completed
+        self.root.after(0, self.enable_checkbox)
+
+    def include_uninstalled_games_in_background(self):
+        """Include all achievement games in the background."""
+        self.toggle_uninstalled_games()  # Call the existing method to include all games
+
+        # Re-enable the checkbox after the operation is completed
+        self.root.after(0, self.enable_checkbox)
+
+    def enable_checkbox(self):
+        """Re-enable the checkbox after background operation."""
+        self.include_uninstalled_checkbox.config(state=tk.NORMAL)
+        self.filter_achievements_checkbox.config(state=tk.NORMAL)
+        self.button_spin.config(state=tk.NORMAL)
+        self.please_wait_label.config(text=f"")
+
+    def supports_achievements(self, app_id):
+        """Check if the game supports achievements using the Steam API."""
+        url = f"https://api.steampowered.com/ISteamUserStats/GetSchemaForGame/v2/"
+        params = {
+            "key": self.api_key,
+            "appid": app_id
+        }
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            # If the game has achievements in its schema, return True
+            return "game" in data and "availableGameStats" in data["game"] and "achievements" in data["game"]["availableGameStats"]
+        except Exception as e:
+            print(f"Error checking schema for app_id {app_id}: {e}")
+            return False
+
+    def include_achievement_games(self):
+        """Remove games with 100% achievements from the excluded list."""
+        to_include = []
+        for app_id in self.excluded_games:
+            if self.get_achievement_progress(app_id) == 100:
+                to_include.append(app_id)
+
+        # Remove the 100% achievement games from the excluded list
+        for app_id in to_include:
+            self.excluded_games.remove(app_id)
+
+    def get_achievement_progress(self, app_id):
+        """Fetch the achievement progress for a game."""
+        # Skip games without achievements
+        if not self.supports_achievements(app_id):
+            print(f"Game {app_id} does not support achievements.")
+            return {"total": 0, "unlocked": 0}
+
+        url = f"https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/"
+        params = {
+            "key": self.api_key,
+            "steamid": self.load_user_id_key(),
+            "appid": app_id
+        }
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()  # Raise an exception for HTTP errors
+            data = response.json()
+
+            if "playerstats" in data and "achievements" in data["playerstats"]:
+                total = len(data["playerstats"]["achievements"])
+                unlocked = sum(ach["achieved"] for ach in data["playerstats"]["achievements"])
+                return {"total": total, "unlocked": unlocked}
+            else:
+                print(f"No achievements data available for app_id {app_id}.")
+                return {"total": 0, "unlocked": 0}
+
+        except requests.exceptions.HTTPError as http_err:
+            if "400" in str(http_err):
+                print(f"Skipping app_id {app_id}: Achievements data not available (400 Bad Request).")
+            else:
+                print(f"HTTP error for app_id {app_id}: {http_err}")
+        except Exception as e:
+            print(f"Error fetching achievements for app_id {app_id}: {e}")
+
+        # Return default progress if the request fails
+        return {"total": 0, "unlocked": 0}
 
     def load_images_in_parallel(self, batch_size=10):
         """Preload images for uninstalled games in batches."""
@@ -758,6 +899,9 @@ class SteamRouletteGUI:
 
         # Re-enable the Spin button after images are loaded
         self.button_spin.config(state=tk.NORMAL, text="Spin the Wheel")
+        self.include_uninstalled_checkbox.config(state=tk.NORMAL)
+        self.filter_achievements_checkbox.config(state=tk.NORMAL)
+        self.please_wait_label.config(text=f"")
         print("Images for uninstalled games have been loaded and cached.")
 
     def load_image_for_game(self, game, cache_dir):
@@ -853,25 +997,33 @@ class SteamRouletteGUI:
         # Update background color for the widget
         widget.config(bg=bg_color)
 
-        # If the widget supports fg (foreground), update it
-        if isinstance(widget, (tk.Button, tk.Label, tk.Entry, tk.Text)):  # Check if widget supports fg
+        # Update foreground and selectcolor where applicable
+        if isinstance(widget, tk.Checkbutton):
+            widget.config(fg=fg_color, selectcolor=bg_color)  # selectcolor matches the background
+        elif isinstance(widget, (tk.Button, tk.Label, tk.Entry, tk.Text)):
             widget.config(fg=fg_color)
 
         # Recursively update child widgets
         for child in widget.winfo_children():
-            if isinstance(child, tk.Widget):  # Only apply to Tkinter widgets
+            if isinstance(child, tk.Widget):  # Apply only to Tkinter widgets
                 self.update_theme(child, bg_color, fg_color)
 
     def toggle_theme(self):
         """Toggle between light mode and dark mode."""
-        # Now, toggle the theme for the entire window
         if self.is_dark_mode:
             self.set_light_mode()
         else:
             self.set_dark_mode()
 
-        # Toggle the mode flag after applying the theme
         self.is_dark_mode = not self.is_dark_mode
+
+    def set_light_mode(self):
+        """Set the window to light mode."""
+        self.update_theme(self.root, self.light_mode_bg, self.light_mode_fg)
+
+    def set_dark_mode(self):
+        """Set the window to dark mode."""
+        self.update_theme(self.root, self.dark_mode_bg, self.dark_mode_fg)
 
     def toggle_spin_button(self):
         """Toggle the spin button between Spin and Re-roll."""
@@ -996,8 +1148,8 @@ class SteamRouletteGUI:
         hs = self.exclude_popup.winfo_screenheight()
         ws = self.exclude_popup.winfo_screenwidth()
 
-        x = (ws/24) - (width/24)
-        y = (hs/3) - (height/3)
+        x = (ws / 24) - (width / 24)
+        y = (hs / 3) - (height / 3)
 
         self.exclude_popup.geometry('%dx%d+%d+%d' % (width, height, x, y))
         self.exclude_popup.resizable(False, False)
@@ -1010,36 +1162,15 @@ class SteamRouletteGUI:
         # Adding mouse wheel scroll functionality
         def on_mouse_wheel(event):
             """Scroll the canvas when mouse wheel is used."""
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")  # Adjust scroll amount
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")  # Adjust scroll amount
 
         # Create a search input box at the top
         search_label = tk.Label(self.exclude_popup, text="Search:", bg=bg_color, fg=fg_color, font="12")
         search_label.pack(pady=2, padx=2)
-        
+
         search_var = tk.StringVar()
         search_entry = tk.Entry(self.exclude_popup, textvariable=search_var, bg=bg_color, fg=fg_color, font="12")
         search_entry.pack(pady=6, padx=2)
-
-        def update_search_results(*args):
-            """Update the checklist dynamically based on the search input."""
-            search_text = search_var.get().lower()
-            
-            # Clear the current game list
-            for widget in scrollable_frame.winfo_children():
-                widget.destroy()
-
-            # Filter the games based on the search text
-            filtered_games = [game for game in sorted_games if search_text in game["name"].lower()]
-            
-            # Create checkboxes for filtered games
-            for game in filtered_games:
-                var = tk.BooleanVar(value=game["app_id"] in self.excluded_games)  # Ensure checkbox reflects exclusion
-                cb = tk.Checkbutton(scrollable_frame, text=game["name"], variable=var, bg=bg_color, fg=fg_color, selectcolor=bg_color, font="12")
-                cb.pack(anchor="w")
-                game_vars[game["app_id"]] = var
-        
-        # Bind the search input to the update function
-        search_var.trace_add("write", update_search_results)
 
         # Scrollable frame for the list of games
         canvas = tk.Canvas(self.exclude_popup, bg=bg_color, bd=0, highlightthickness=0)
@@ -1049,7 +1180,7 @@ class SteamRouletteGUI:
         canvas.bind_all("<MouseWheel>", on_mouse_wheel)  # Windows and Mac mouse wheel scroll
 
         scrollbar.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True, padx= 4)
+        canvas.pack(side="left", fill="both", expand=True, padx=4)
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         scrollable_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
 
@@ -1057,22 +1188,29 @@ class SteamRouletteGUI:
         all_games = self.installed_games  # Use the installed_games as the base
         sorted_games = sorted(all_games, key=lambda game: game["name"].lower())
 
-        # Log for debugging
-        print(f"Populating exclude list with games: {[game['name'] for game in sorted_games]}")
-
         # Initialize the game vars dictionary for checkboxes
-        game_vars = {}
+        self.game_vars = {}
 
-        # Initially populate with all games
+        # Create checkboxes for each game
         for game in sorted_games:
-            var = tk.BooleanVar(value=game["app_id"] in self.excluded_games)  # Ensure checkbox reflects exclusion
-            cb = tk.Checkbutton(scrollable_frame, text=game["name"], variable=var, bg=bg_color, fg=fg_color, selectcolor=bg_color, font="12")
+            app_id = game["app_id"]
+            is_excluded = app_id in self.excluded_games  # Check if the game is excluded
+            var = tk.BooleanVar(value=is_excluded)  # Set initial checkbox state
+            cb = tk.Checkbutton(
+                scrollable_frame,
+                text=game["name"],
+                variable=var,
+                bg=bg_color,
+                fg=fg_color,
+                selectcolor=bg_color,
+                font="12"
+            )
             cb.pack(anchor="w")
-            game_vars[game["app_id"]] = var
+            self.game_vars[app_id] = var
 
         def apply_exclusions():
             """Apply the exclusions and update the list of excluded games."""
-            self.excluded_games = [app_id for app_id, var in game_vars.items() if var.get()]
+            self.excluded_games = [app_id for app_id, var in self.game_vars.items() if var.get()]
             self.excluded_label.config(text=f"Excluded Games:\n{len(self.excluded_games)}")
             self.save_exclusions()
             messagebox.showinfo("Exclusions Applied", f"Excluded {len(self.excluded_games)} games.")
