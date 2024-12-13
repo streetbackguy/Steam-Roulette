@@ -37,7 +37,7 @@ To get your Steam API Key, visit https://steamcommunity.com/dev/apikey and login
 - Feature to now include games you own that are not installed in the spin list
 - Exclude games/items you don't want to be included in the spin
 
-![image](https://github.com/user-attachments/assets/d02307aa-a84d-4a59-a211-a173c4949b26)
+![image](https://github.com/user-attachments/assets/825ca6dd-cb64-4d09-ab78-1fe8aa3cbd17)
 
 # To-Do
 - Find a permanent way to calculate installation size for each game on each separate drive
