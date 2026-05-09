@@ -190,17 +190,41 @@ def create_placeholder_image(text: str) -> Image.Image:
     return img
 
 
-def fetch_header_image(app_id: str, cache_dir: str, timeout: int = 10) -> Image.Image:
+def create_placeholder_icon(size: int = 20) -> Image.Image:
+    """Generate a small square placeholder icon for games with no icon available.
+    Draws a dark rounded square with a faint '?' centred inside."""
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    margin = 1
+    draw.rounded_rectangle(
+        [margin, margin, size - margin - 1, size - margin - 1],
+        radius=3,
+        fill=(60, 60, 65, 220),
+        outline=(120, 120, 128, 180),
+    )
+    font = ImageFont.load_default()
+    text = "?"
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    draw.text(
+        ((size - tw) / 2, (size - th) / 2 - 1),
+        text, font=font, fill=(180, 180, 185, 255),
+    )
+    return img
+
+
+def fetch_header_image(app_id: str, cache_dir: str, timeout: int = 10,
+                       game_name: str = "") -> Image.Image:
     """Fetch game header image from disk cache or Steam CDN."""
+    label = f"{game_name} ({app_id})" if game_name else app_id
     cache_file = os.path.join(cache_dir, f"{app_id}.jpg")
     if os.path.exists(cache_file):
         try:
             img = Image.open(cache_file)
-            img.load()  # force full decode so corrupt files raise here, not later
+            img.load()
             return img
-        except Exception:
-            # Corrupt or truncated cache file — delete it and re-fetch
-            print(f"Corrupt cache file for app_id {app_id}, re-fetching…")
+        except Exception as e:
+            print(f"[Image] Corrupt cache for {label} — deleting and re-fetching. ({e})")
             try:
                 os.remove(cache_file)
             except OSError:
@@ -215,19 +239,24 @@ def fetch_header_image(app_id: str, cache_dir: str, timeout: int = 10) -> Image.
     for url in urls:
         try:
             resp = _session.get(url, timeout=timeout)
-            if resp.status_code == 200 and len(resp.content) > 1024:  # ignore empty/tiny responses
+            if resp.status_code == 200 and len(resp.content) > 1024:
                 img = Image.open(BytesIO(resp.content))
-                img.load()  # verify it's a valid image before caching
+                img.load()
                 img.save(cache_file, "JPEG")
+                print(f"[Image] Downloaded: {label}")
                 return img
+            elif resp.status_code != 200:
+                print(f"[Image] HTTP {resp.status_code} for {label} — {url}")
         except Exception as e:
-            print(f"Error fetching image for app_id {app_id} from {url}: {e}")
+            print(f"[Image] Error fetching {label} from {url}: {e}")
 
+    print(f"[Image] All URLs failed for {label} — using placeholder.")
     return create_placeholder_image("Image Unavailable")
 
 
 def fetch_game_icon(app_id: str, icon_hash: str, cache_dir: str,
-                    size: int = 20, timeout: int = 6) -> "Image.Image | None":
+                    size: int = 20, timeout: int = 6,
+                    game_name: str = "") -> "Image.Image | None":
     """Fetch a small icon for a game as a PIL Image, scaled to size px.
     Returns a PIL Image (not PhotoImage) so it can be used from background threads.
     Caller must convert to PhotoImage on the main thread.
@@ -235,6 +264,7 @@ def fetch_game_icon(app_id: str, icon_hash: str, cache_dir: str,
     if not app_id:
         return None
 
+    label = f"{game_name} ({app_id})" if game_name else app_id
     cache_file = os.path.join(cache_dir, f"icon_{app_id}.png")
 
     # Migrate legacy .jpg cache
@@ -245,23 +275,22 @@ def fetch_game_icon(app_id: str, icon_hash: str, cache_dir: str,
             img.load()
             img.save(cache_file, "PNG")
             os.remove(legacy_cache)
-        except Exception:
-            pass
+            print(f"[Icon] Migrated legacy .jpg cache for {label}")
+        except Exception as e:
+            print(f"[Icon] Failed to migrate legacy cache for {label}: {e}")
 
     if os.path.exists(cache_file):
         try:
             img = Image.open(cache_file).convert("RGBA")
             img.load()
             return img.resize((size, size), Image.Resampling.LANCZOS)
-        except Exception:
+        except Exception as e:
+            print(f"[Icon] Corrupt cache for {label} — deleting and re-fetching. ({e})")
             try:
                 os.remove(cache_file)
             except OSError:
                 pass
 
-    # URL priority:
-    # 1. capsule_sm_120 — public Steam store CDN, no auth needed, works for all games
-    # 2. Community icon hash URLs — only works for some games without auth
     urls = [
         f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/capsule_sm_120.jpg",
         f"https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/capsule_sm_120.jpg",
@@ -271,6 +300,7 @@ def fetch_game_icon(app_id: str, icon_hash: str, cache_dir: str,
                 f"/images/apps/{app_id}/{icon_hash}")
         urls += [base, f"{base}.jpg", f"{base}.png"]
 
+    tried = []
     for url in urls:
         try:
             resp = _session.get(url, timeout=timeout)
@@ -278,10 +308,21 @@ def fetch_game_icon(app_id: str, icon_hash: str, cache_dir: str,
                 img = Image.open(BytesIO(resp.content)).convert("RGBA")
                 img.load()
                 img.save(cache_file, "PNG")
+                print(f"[Icon] Downloaded: {label}")
                 return img.resize((size, size), Image.Resampling.LANCZOS)
+            elif resp.status_code == 404:
+                tried.append(os.path.basename(url.split("?")[0]))
+            else:
+                print(f"[Icon] HTTP {resp.status_code} for {label} — {url}")
         except Exception as e:
-            print(f"Icon fetch failed for {app_id} ({url}): {e}")
-    return None
+            print(f"[Icon] Error fetching {label} from {url}: {e}")
+
+    if tried:
+        print(f"[Icon] No icon found for {label} "
+              f"(404 on: {', '.join(tried)}) — using placeholder.")
+    else:
+        print(f"[Icon] All URLs failed for {label} — using placeholder.")
+    return create_placeholder_icon(size)
 
 
 # ---------------------------------------------------------------------------
@@ -440,6 +481,137 @@ class ProgressWindow:
 # ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
+class LogWindow:
+    """A scrolling log window that captures all stdout/stderr output.
+
+    Instantiated once and kept alive for the session. Calling open() shows it;
+    closing the window hides it rather than destroying it so the log is preserved.
+    sys.stdout and sys.stderr are redirected to this window as soon as it is created.
+    """
+
+    def __init__(self, root: tk.Tk):
+        self.root  = root
+        self._win  = None
+        self._text = None
+        self._queue: queue.Queue = queue.Queue()
+
+        # Redirect stdout and stderr immediately
+        self._orig_stdout = sys.stdout
+        self._orig_stderr = sys.stderr
+        sys.stdout = self
+        sys.stderr = self
+
+        # Poll the queue every 100 ms from the main thread
+        self.root.after(100, self._flush)
+
+    # ------------------------------------------------------------------
+    # Stream interface (write / flush) so this object can act as stdout
+    # ------------------------------------------------------------------
+    def write(self, text: str):
+        self._orig_stdout.write(text)   # keep VS Code / terminal output working
+        self._queue.put(text)
+
+    def flush(self):
+        self._orig_stdout.flush()
+
+    # ------------------------------------------------------------------
+    # Queue drainer — runs on main thread so Text widget is safe to touch
+    # ------------------------------------------------------------------
+    def _flush(self):
+        try:
+            while True:
+                text = self._queue.get_nowait()
+                if self._text:
+                    self._text.configure(state="normal")
+                    self._text.insert("end", text)
+                    self._text.see("end")
+                    self._text.configure(state="disabled")
+        except queue.Empty:
+            pass
+        self.root.after(100, self._flush)
+
+    # ------------------------------------------------------------------
+    # Window management
+    # ------------------------------------------------------------------
+    def open(self, bg: str = "#ffffff", fg: str = "#000000"):
+        if self._win and self._win.winfo_exists():
+            self._win.lift()
+            return
+
+        self._win = tk.Toplevel(self.root)
+        self._win.title("Log")
+        self._win.protocol("WM_DELETE_WINDOW", self._win.withdraw)
+        try:
+            if os.path.exists(ICON_PATH):
+                self._win.iconbitmap(ICON_PATH)
+        except Exception:
+            pass
+
+        ws = self.root.winfo_screenwidth()
+        hs = self.root.winfo_screenheight()
+        w, h = 700, 400
+        self._win.geometry(f"{w}x{h}+{ws//2 - w//2}+{hs//2 - h//2}")
+        self._win.configure(bg=bg)
+
+        # Toolbar
+        toolbar = tk.Frame(self._win, bg=bg)
+        toolbar.pack(fill="x", padx=6, pady=(6, 2))
+        tk.Button(toolbar, text="Clear", font=("Arial", 9), bg=bg, fg=fg,
+                  command=self._clear).pack(side="left", padx=(0, 4))
+        tk.Button(toolbar, text="Copy All", font=("Arial", 9), bg=bg, fg=fg,
+                  command=self._copy_all).pack(side="left")
+
+        # Scrolling text area
+        frame = tk.Frame(self._win, bg=bg)
+        frame.pack(fill="both", expand=True, padx=6, pady=(2, 6))
+        vsb = tk.Scrollbar(frame)
+        vsb.pack(side="right", fill="y")
+        self._text = tk.Text(
+            frame,
+            wrap="word",
+            state="disabled",
+            font=("Courier", 9),
+            bg="#1e1e1e" if bg == "#2e2e2e" else "#f5f5f5",
+            fg="#d4d4d4" if bg == "#2e2e2e" else "#1e1e1e",
+            insertbackground=fg,
+            yscrollcommand=vsb.set,
+            relief="flat",
+        )
+        self._text.pack(fill="both", expand=True)
+        vsb.configure(command=self._text.yview)
+
+    def apply_theme(self, bg: str, fg: str):
+        """Call when the main window theme changes."""
+        if self._win and self._win.winfo_exists():
+            self._win.configure(bg=bg)
+            if self._text:
+                self._text.configure(
+                    bg="#1e1e1e" if bg == "#2e2e2e" else "#f5f5f5",
+                    fg="#d4d4d4" if bg == "#2e2e2e" else "#1e1e1e",
+                )
+            for w in self._win.winfo_children():
+                try:
+                    w.configure(bg=bg, fg=fg)
+                except tk.TclError:
+                    pass
+
+    def _clear(self):
+        if self._text:
+            self._text.configure(state="normal")
+            self._text.delete("1.0", "end")
+            self._text.configure(state="disabled")
+
+    def _copy_all(self):
+        if self._text:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self._text.get("1.0", "end"))
+
+    def restore(self):
+        """Restore original stdout/stderr — call on app exit."""
+        sys.stdout = self._orig_stdout
+        sys.stderr = self._orig_stderr
+
+
 class SteamRouletteGUI:
     def __init__(self, root: tk.Tk, installed_games: list, drives: list):
         self.root = root
@@ -458,6 +630,9 @@ class SteamRouletteGUI:
         self.selected_game_item = None
         self.animation_id = None
         self.preloaded_images: dict = {}
+
+        # Log window — created early so all subsequent print() calls are captured
+        self.log_window = LogWindow(self.root)
 
         # Color schemes
         self.light_mode_bg = "#ffffff"
@@ -650,7 +825,11 @@ class SteamRouletteGUI:
 
         tk.Button(self.button_frame, text="Clear Image Cache",
                   command=self.clear_image_cache, font=("Arial", 10), bg=bg, fg=fg
-                  ).grid(row=1, column=0, columnspan=3, pady=2, padx=2, sticky="ew")
+                  ).grid(row=1, column=0, columnspan=2, pady=2, padx=2, sticky="ew")
+
+        tk.Button(self.button_frame, text="Log Window",
+                  command=self.open_log_window, font=("Arial", 10), bg=bg, fg=fg
+                  ).grid(row=1, column=2, pady=2, padx=2, sticky="ew")
 
         # ── Bottom-right: checkboxes + status ────────────────────────
         
@@ -728,7 +907,8 @@ class SteamRouletteGUI:
                 already = app_id in self.preloaded_images
             if already:
                 return
-            img = fetch_header_image(app_id, self.cache_dir)
+            img = fetch_header_image(app_id, self.cache_dir,
+                                     game_name=game.get("name", ""))
             with _image_lock:
                 self.preloaded_images[app_id] = img
 
@@ -742,25 +922,51 @@ class SteamRouletteGUI:
         print("Installed-game images pre-loaded.")
 
     def load_images_in_parallel(self, pw: "ProgressWindow | None" = None):
-        """Download images for uninstalled games with a progress window."""
-        games = list(self.uninstalled_games)
-        total = len(games)
-        completed = 0
-        lock = threading.Lock()
+        """Download header images for uninstalled games, skipping any already cached."""
+        all_games = list(self.uninstalled_games)
 
-        # If no window was passed in (e.g. called standalone), create a fresh one
+        # Filter to only games whose image isn't already on disk
+        def _is_cached(game) -> bool:
+            cache_file = os.path.join(self.cache_dir, f"{game['app_id']}.jpg")
+            return os.path.exists(cache_file)
+
+        games_to_fetch = [g for g in all_games if not _is_cached(g)]
+        already_cached  = len(all_games) - len(games_to_fetch)
+        total           = len(games_to_fetch)
+
+        print(f"Image download: {already_cached} already cached, "
+              f"{total} to fetch.")
+
+        # If no window was passed in, create a fresh one
         if pw is None:
             pw_holder = [None]
             def _open_pw():
-                pw_holder[0] = ProgressWindow(self.root, "Downloading Images", total)
+                pw_holder[0] = ProgressWindow(
+                    self.root, "Downloading Images", max(total, 1))
             self.root.after(0, _open_pw)
             import time as _time; _time.sleep(0.05)
         else:
+            if total > 0:
+                self.root.after(0, lambda: pw.switch_to_determinate(
+                    total, f"Downloading images… 0 of {total}"))
             pw_holder = [pw]
+
+        if total == 0:
+            # Nothing to download — close the progress window and finish
+            def _nothing_to_do():
+                if pw_holder[0]:
+                    pw_holder[0].close()
+                self.on_images_preloaded()
+            self.root.after(0, _nothing_to_do)
+            return
+
+        completed = 0
+        lock = threading.Lock()
 
         def _load_one(game):
             nonlocal completed
-            fetch_header_image(game["app_id"], self.cache_dir)
+            fetch_header_image(game["app_id"], self.cache_dir,
+                               game_name=game.get("name", ""))
             with lock:
                 completed += 1
                 c = completed
@@ -771,7 +977,7 @@ class SteamRouletteGUI:
             self.root.after(0, _upd)
 
         with ThreadPoolExecutor(max_workers=PRELOAD_WORKERS) as ex:
-            ex.map(_load_one, games)
+            ex.map(_load_one, games_to_fetch)
 
         def _finish():
             if pw_holder[0]:
@@ -887,6 +1093,11 @@ class SteamRouletteGUI:
         for child in widget.winfo_children():
             self.update_theme(child, bg, fg)
 
+    def open_log_window(self):
+        bg = self.dark_mode_bg if self.is_dark_mode else self.light_mode_bg
+        fg = self.dark_mode_fg if self.is_dark_mode else self.light_mode_fg
+        self.log_window.open(bg=bg, fg=fg)
+
     def set_light_mode(self):
         self.update_theme(self.root, self.light_mode_bg, self.light_mode_fg)
 
@@ -896,8 +1107,10 @@ class SteamRouletteGUI:
     def toggle_theme(self):
         if self.is_dark_mode:
             self.set_light_mode()
+            self.log_window.apply_theme(self.light_mode_bg, self.light_mode_fg)
         else:
             self.set_dark_mode()
+            self.log_window.apply_theme(self.dark_mode_bg, self.dark_mode_fg)
         self.is_dark_mode = not self.is_dark_mode
 
     # ------------------------------------------------------------------
@@ -1349,7 +1562,8 @@ class SteamRouletteGUI:
                     app_id = str(game["app_id"])
                     icon_hash = game.get("img_icon_url", "")
                     pil_img = fetch_game_icon(
-                        app_id, icon_hash, self.cache_dir, size=ICON_SIZE)
+                        app_id, icon_hash, self.cache_dir, size=ICON_SIZE,
+                        game_name=game.get("name", ""))
                     with lock:
                         fetched[0] += 1
                     if cancel_token[0] == my_token:
@@ -1497,7 +1711,8 @@ class SteamRouletteGUI:
         if not self.installed_games:
             return
         game = random.choice(self.installed_games)
-        img = fetch_header_image(game["app_id"], self.cache_dir)
+        img = fetch_header_image(game["app_id"], self.cache_dir,
+                                 game_name=game.get("name", ""))
         self._display_image_on_canvas(img)
         self.canvas.update_idletasks()
 
@@ -1515,7 +1730,9 @@ class SteamRouletteGUI:
         with _image_lock:
             img = self.preloaded_images.get(app_id)
         if not img:
-            img = fetch_header_image(app_id, self.cache_dir)
+            name = next((g.get("name", "") for g in self.installed_games
+                         if str(g["app_id"]) == str(app_id)), "")
+            img = fetch_header_image(app_id, self.cache_dir, game_name=name)
             with _image_lock:
                 self.preloaded_images[app_id] = img
         cw = self.canvas.winfo_width() or 600
@@ -1541,42 +1758,62 @@ class SteamRouletteGUI:
         self.selected_game = random.choice(valid_games)
         print(f"Winner: {self.selected_game['name']} (app_id: {self.selected_game['app_id']})")
 
-        self.button_spin.config(state=tk.DISABLED, text="Spinning…")
+        self.button_spin.config(state=tk.DISABLED, text="Loading…")
         self.button_launch.config(state=tk.DISABLED)
         self.button_store.config(state=tk.DISABLED)
+        self.label_welcome.config(text="Loading images…")
 
-        self.cycle_images(sample)
+        # Build the full list of games that need to appear in the animation
+        games_to_draw = list(sample)
+        if self.selected_game not in games_to_draw:
+            games_to_draw.append(self.selected_game)
 
-    def cycle_images(self, selected_games: list):
+        # Find which images aren't cached yet
+        missing = []
+        for game in games_to_draw:
+            with _image_lock:
+                cached = self.preloaded_images.get(game["app_id"])
+            if cached is None:
+                missing.append(game)
+
+        if missing:
+            print(f"[Spin] Fetching {len(missing)} missing image(s) before spinning…")
+
+        def _preload_then_spin():
+            """Fetch any missing images in background, then kick off the animation."""
+            for game in missing:
+                app_id = game["app_id"]
+                with _image_lock:
+                    already = self.preloaded_images.get(app_id)
+                if already is None:
+                    img = fetch_header_image(app_id, self.cache_dir,
+                                             game_name=game.get("name", ""))
+                    with _image_lock:
+                        self.preloaded_images[app_id] = img
+
+            # Hand off to the main thread to start the animation
+            self.root.after(0, lambda: self.cycle_images(sample, games_to_draw))
+
+        threading.Thread(target=_preload_then_spin, daemon=True).start()
+
+    def cycle_images(self, selected_games: list, games_to_draw: list):
         self.active_images = []
         self.label_welcome.config(text="Rolling…")
+        self.button_spin.config(text="Spinning…")
 
         self.canvas.update_idletasks()
         cw = self.canvas.winfo_width() or 600
         ch = self.canvas.winfo_height() or 300
 
-        # Ensure images exist in preloaded dict
-        for game in selected_games:
-            app_id = game["app_id"]
-            with _image_lock:
-                cached = self.preloaded_images.get(app_id)
-            if cached is None:
-                img = fetch_header_image(app_id, self.cache_dir)
-                with _image_lock:
-                    self.preloaded_images[app_id] = img
-
-        # Place images on canvas side-by-side
+        # Place images on canvas side-by-side — all images are guaranteed to be
+        # in preloaded_images now because _preload_then_spin ran first
         x_pos = 0
-        games_to_draw = list(selected_games)
-        # Append the winning game at the end
-        if self.selected_game not in games_to_draw:
-            games_to_draw.append(self.selected_game)
-
         for game in games_to_draw:
             app_id = game["app_id"]
             with _image_lock:
                 img = self.preloaded_images.get(app_id)
             if img is None:
+                print(f"[Spin] Image still missing for {game.get('name')} — skipping.")
                 continue
             try:
                 img_r = img.resize((cw, ch), Image.Resampling.LANCZOS)
@@ -1585,7 +1822,7 @@ class SteamRouletteGUI:
                 self.active_images.append((item, img_tk))
                 x_pos += cw
             except Exception as e:
-                print(f"Error placing image for {game['name']}: {e}")
+                print(f"[Spin] Error placing image for {game.get('name', '?')}: {e}")
 
         self.animate_images()
 
@@ -1672,6 +1909,7 @@ def main():
     app = SteamRouletteGUI(root, games, drives)
     app.cache_dir = cache_dir
     root.mainloop()
+    app.log_window.restore()
 
 
 if __name__ == "__main__":
