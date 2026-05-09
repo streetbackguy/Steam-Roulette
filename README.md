@@ -41,6 +41,7 @@ To get your Steam API Key, visit https://steamcommunity.com/dev/apikey and login
 
 # To-Do
 - Fix freezing issue when dealing with game librarys that are very big
+- Fix issue where some games images on the wheel are unavailable
 
 # Virus Scan
 
