@@ -1,5 +1,6 @@
 import os
 import io
+import queue
 import random
 import platform
 import webbrowser
@@ -21,12 +22,31 @@ from functools import lru_cache
 # Constants
 # ---------------------------------------------------------------------------
 PLACEHOLDER_IMAGE_DIMENSIONS = (600, 300)
-ANIMATION_DURATION_MS = 7600
-FRAME_DELAY_MS = 16
-SLOWDOWN_FACTOR = 0.95
-MIN_SPEED = 5
-PRELOAD_WORKERS = 10
+ANIMATION_DURATION_MS = 7600   # total desired spin duration
+FRAME_DELAY_MS = 16            # ~60 FPS
+SLOWDOWN_FACTOR = 0.95         # speed multiplier each frame during deceleration
+MIN_SPEED = 5                  # pixels/frame floor during slowdown
+PRELOAD_WORKERS = 10           # threads used for parallel image pre-load
 IMAGE_CACHE_SUBDIR = "image_cache"
+
+# Steam tool/redistributable app IDs that should never appear as spinnable games
+NON_GAME_APP_IDS = {
+    "228980",   # Steamworks Common Redistributables
+    "250820",   # SteamVR
+    "1070560",  # Steam Linux Runtime
+    "1391110",  # Steam Linux Runtime - Soldier
+    "1628350",  # Steam Linux Runtime - Sniper
+    "1493710",  # Proton Experimental
+    "1887720",  # Proton 7.0
+    "2348590",  # Proton 8.0
+    "1245040",  # Proton 5.0
+    "1420170",  # Proton 5.13
+    "1580130",  # Proton 6.3
+    "223850", # 3DMark
+    "365670", # Blender
+    "431960", # Wallpaper Engine
+    "3419430", # Bongo Cat
+}
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +146,7 @@ def fetch_game_data(acf_path: str, library_path: str) -> dict:
 def get_installed_games(steam_path: str) -> list:
     library_folders = parse_vdf(os.path.join(steam_path, "steamapps", "libraryfolders.vdf"))
     installed_games = []
+    seen_ids: set = set()
     for library_path in library_folders.values():
         if not (library_path and isinstance(library_path, str)):
             continue
@@ -134,10 +155,18 @@ def get_installed_games(steam_path: str) -> list:
             continue
         for acf_file in filter(lambda f: f.endswith(".acf"), os.listdir(steamapps_path)):
             game = fetch_game_data(os.path.join(steamapps_path, acf_file), library_path)
-            if game and game.get("app_id"):
-                installed_games.append(game)
-            else:
+            if not game or not game.get("app_id"):
                 print(f"Excluded invalid game entry: {game}")
+                continue
+            app_id = str(game["app_id"])
+            if app_id in NON_GAME_APP_IDS:
+                print(f"Skipping non-game tool: {game.get('name')} ({app_id})")
+                continue
+            if app_id in seen_ids:
+                print(f"Skipping duplicate: {game.get('name')} ({app_id})")
+                continue
+            seen_ids.add(app_id)
+            installed_games.append(game)
     return installed_games
 
 
@@ -166,25 +195,93 @@ def fetch_header_image(app_id: str, cache_dir: str, timeout: int = 10) -> Image.
     cache_file = os.path.join(cache_dir, f"{app_id}.jpg")
     if os.path.exists(cache_file):
         try:
-            return Image.open(cache_file)
+            img = Image.open(cache_file)
+            img.load()  # force full decode so corrupt files raise here, not later
+            return img
         except Exception:
-            pass  # corrupt cache file – re-fetch below
+            # Corrupt or truncated cache file — delete it and re-fetch
+            print(f"Corrupt cache file for app_id {app_id}, re-fetching…")
+            try:
+                os.remove(cache_file)
+            except OSError:
+                pass
 
     urls = [
         f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/header.jpg",
+        f"https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/header.jpg",
+        f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/capsule_616x353.jpg",
         f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/page_bg.jpg",
     ]
     for url in urls:
         try:
-            resp = requests.get(url, timeout=timeout)
-            if resp.status_code == 200:
+            resp = _session.get(url, timeout=timeout)
+            if resp.status_code == 200 and len(resp.content) > 1024:  # ignore empty/tiny responses
                 img = Image.open(BytesIO(resp.content))
+                img.load()  # verify it's a valid image before caching
                 img.save(cache_file, "JPEG")
                 return img
         except Exception as e:
-            print(f"Error fetching image for app_id {app_id}: {e}")
+            print(f"Error fetching image for app_id {app_id} from {url}: {e}")
 
     return create_placeholder_image("Image Unavailable")
+
+
+def fetch_game_icon(app_id: str, icon_hash: str, cache_dir: str,
+                    size: int = 20, timeout: int = 6) -> "Image.Image | None":
+    """Fetch a small icon for a game as a PIL Image, scaled to size px.
+    Returns a PIL Image (not PhotoImage) so it can be used from background threads.
+    Caller must convert to PhotoImage on the main thread.
+    Always cached as PNG to support RGBA icons."""
+    if not app_id:
+        return None
+
+    cache_file = os.path.join(cache_dir, f"icon_{app_id}.png")
+
+    # Migrate legacy .jpg cache
+    legacy_cache = os.path.join(cache_dir, f"icon_{app_id}.jpg")
+    if os.path.exists(legacy_cache) and not os.path.exists(cache_file):
+        try:
+            img = Image.open(legacy_cache).convert("RGBA")
+            img.load()
+            img.save(cache_file, "PNG")
+            os.remove(legacy_cache)
+        except Exception:
+            pass
+
+    if os.path.exists(cache_file):
+        try:
+            img = Image.open(cache_file).convert("RGBA")
+            img.load()
+            return img.resize((size, size), Image.Resampling.LANCZOS)
+        except Exception:
+            try:
+                os.remove(cache_file)
+            except OSError:
+                pass
+
+    # URL priority:
+    # 1. capsule_sm_120 — public Steam store CDN, no auth needed, works for all games
+    # 2. Community icon hash URLs — only works for some games without auth
+    urls = [
+        f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/capsule_sm_120.jpg",
+        f"https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/capsule_sm_120.jpg",
+    ]
+    if icon_hash:
+        base = (f"https://media.steampowered.com/steamcommunity/public"
+                f"/images/apps/{app_id}/{icon_hash}")
+        urls += [base, f"{base}.jpg", f"{base}.png"]
+
+    for url in urls:
+        try:
+            resp = _session.get(url, timeout=timeout)
+            if resp.status_code == 200 and len(resp.content) > 64:
+                img = Image.open(BytesIO(resp.content)).convert("RGBA")
+                img.load()
+                img.save(cache_file, "PNG")
+                return img.resize((size, size), Image.Resampling.LANCZOS)
+        except Exception as e:
+            print(f"Icon fetch failed for {app_id} ({url}): {e}")
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +297,7 @@ def get_all_games(api_key: str, steam_id: str) -> list:
         "include_played_free_games": True,
     }
     try:
-        resp = requests.get(url, params=params, timeout=10)
+        resp = _session.get(url, params=params, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         if "response" in data and "games" in data["response"]:
@@ -244,6 +341,103 @@ def get_drives() -> list:
 
 
 # ---------------------------------------------------------------------------
+# Shared requests session (reuses TCP connections across all API/image calls)
+# ---------------------------------------------------------------------------
+_session = requests.Session()
+_session.headers.update({"User-Agent": "SteamRoulette/1.0"})
+
+
+# ---------------------------------------------------------------------------
+# Progress window
+# ---------------------------------------------------------------------------
+class ProgressWindow:
+    """Modal progress window with a determinate or indeterminate bar and a status label."""
+
+    def __init__(self, parent: tk.Tk, title: str, total: int,
+                 bg: str = "#ffffff", fg: str = "#000000"):
+        self.total = total
+        self._closed = False
+        self._indeterminate = (total == 0)
+
+        self.win = tk.Toplevel(parent)
+        self.win.title(title)
+        self.win.resizable(False, False)
+        self.win.grab_set()
+        self.win.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        # Window icon
+        try:
+            if os.path.exists(ICON_PATH):
+                self.win.iconbitmap(ICON_PATH)
+        except Exception as e:
+            print(f"Error setting window icon: {e}")
+
+        self.win.configure(bg=bg)
+
+        ws = parent.winfo_screenwidth()
+        hs = parent.winfo_screenheight()
+        w, h = 380, 110
+        self.win.geometry(f"{w}x{h}+{ws//2 - w//2}+{hs//2 - h//2}")
+
+        self.label = tk.Label(self.win, text="", wraplength=360, justify="center",
+                              font=("Arial", 9), bg=bg, fg=fg)
+        self.label.pack(pady=(14, 4), padx=10)
+
+        # Style the progressbar to match theme
+        style = ttk.Style(self.win)
+        style_name = f"pw{id(self)}.Horizontal.TProgressbar"
+        style.configure(style_name, troughcolor=bg, background="#4a90d9")
+
+        mode = "indeterminate" if self._indeterminate else "determinate"
+        self.bar = ttk.Progressbar(self.win, orient="horizontal",
+                                   length=340, mode=mode,
+                                   maximum=max(total, 1),
+                                   style=style_name)
+        self.bar.pack(pady=(0, 14), padx=20)
+
+        if self._indeterminate:
+            self.bar.start(12)
+
+        self.win.update_idletasks()
+
+    def set_text(self, text: str):
+        """Update the status label (safe to call from any thread via root.after)."""
+        if not self._closed:
+            self.label.config(text=text)
+            self.win.update_idletasks()
+
+    def switch_to_determinate(self, total: int, text: str = ""):
+        """Switch from indeterminate to determinate mode once total is known."""
+        if self._closed:
+            return
+        self.bar.stop()
+        self.total = max(total, 1)
+        self._indeterminate = False
+        self.bar.config(mode="determinate", maximum=self.total, value=0)
+        if text:
+            self.label.config(text=text)
+        self.win.update_idletasks()
+
+    def update(self, value: int, text: str = ""):
+        if self._closed:
+            return
+        self.bar["value"] = value
+        if text:
+            self.label.config(text=text)
+        self.win.update_idletasks()
+
+    def close(self):
+        if not self._closed:
+            self._closed = True
+            try:
+                self.bar.stop()
+                self.win.grab_release()
+                self.win.destroy()
+            except tk.TclError:
+                pass
+
+
+# ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
 class SteamRouletteGUI:
@@ -280,6 +474,8 @@ class SteamRouletteGUI:
         self.load_exclusions()
         # Pre-load installed-game images in the background; UI stays responsive
         threading.Thread(target=self._preload_installed_images, daemon=True).start()
+        # Fetch icon hashes for installed games from the Steam API in the background
+        threading.Thread(target=self._fetch_icon_hashes, daemon=True).start()
 
     # ------------------------------------------------------------------
     # File I/O helpers
@@ -317,47 +513,15 @@ class SteamRouletteGUI:
         fg = self.light_mode_fg
 
         # ── Top info bar ─────────────────────────────────────────────
-        self.copyright_notice = tk.Label(self.root, text="© Streetbackguy 2024",
-                                         font=("Arial", 8), bg=bg, fg=fg)
-        self.copyright_notice.place(relx=0.0, rely=0.0, anchor="nw", x=5, y=5)
-
-        self.label_game_count = tk.Label(self.root, text=self._games_found_text(),
-                                         font=("Arial", 10), bg=bg, fg=fg)
-        self.root.update_idletasks()
-        self.label_game_count.place(x=self.root.winfo_width() - 5, y=5, anchor="ne")
-
-        # ── Top info bar ─────────────────────────────────────────────
         self.copyright_notice = tk.Label(
-            self.root,
-            text="© Streetbackguy 2024",
-            font=("Arial", 8),
-            bg=bg,
-            fg=fg
-        )
-
-        self.copyright_notice.place(x=10, y=58)
-
-        self.label_game_count = tk.Label(
-            self.root,
-            text=self._games_found_text(),
-            font=("Arial", 10),
-            bg=bg,
-            fg=fg
-        )
-
-        self.root.update_idletasks()
-
-        self.label_game_count.place(
-            x=self.root.winfo_width() - 5,
-            y=5,
-            anchor="ne"
-        )
+            self.root, text="© Streetbackguy 2024", font=("Arial", 8), bg=bg, fg=fg)
+        self.copyright_notice.place(x=2, y=58)
 
         # ── Logo / title frame ───────────────────────────────────────
         top_frame = tk.Frame(self.root, bg=bg)
 
         # Push main content downward slightly
-        top_frame.pack(side="top", pady=55)
+        top_frame.pack(side="top", pady=(90, 0))
 
         # Small logo positioned manually in top-left
         try:
@@ -401,7 +565,7 @@ class SteamRouletteGUI:
             text="Welcome to Steam Roulette!",
             font=("Arial", 16),
             bg=bg,
-            fg=fg
+            fg=fg,
         )
 
         self.label_welcome.grid(row=0, pady=5)
@@ -409,17 +573,18 @@ class SteamRouletteGUI:
         self.label_game_name = tk.Label(
             top_frame,
             text="",
-            wraplength=580,
-            font=("Arial", 20),
+            wraplength=420,
+            font=("Arial", 16),
             bg=bg,
-            fg=fg
+            fg=fg,
+            padx=130,   # pushes text right, clear of the logo in the top-left
         )
 
-        self.label_game_name.grid(row=1, pady=5)
+        self.label_game_name.grid(row=1, pady=(2, 0))
 
         # ── Canvas (game art strip) ──────────────────────────────────
         self.canvas = tk.Canvas(self.root, width=600, height=300, bg="black")
-        self.canvas.pack(pady=1)
+        self.canvas.pack(pady=0)
         self.root.update_idletasks()
         self.display_random_header_image()
 
@@ -443,7 +608,7 @@ class SteamRouletteGUI:
 
         # ── Controls: number of games / exclusions ───────────────────
         self.frame_controls = tk.Frame(self.root, bg=bg)
-        self.frame_controls.place(anchor="w", x=4, y=645)
+        self.frame_controls.place(anchor="w", x=4, y=610)
         for col in range(3):
             self.frame_controls.grid_columnconfigure(col, weight=1)
 
@@ -483,32 +648,76 @@ class SteamRouletteGUI:
                   command=self.toggle_theme, font=("Arial", 10), bg=bg, fg=fg
                   ).grid(row=0, column=2, pady=2, padx=2)
 
+        tk.Button(self.button_frame, text="Clear Image Cache",
+                  command=self.clear_image_cache, font=("Arial", 10), bg=bg, fg=fg
+                  ).grid(row=1, column=0, columnspan=3, pady=2, padx=2, sticky="ew")
+
         # ── Bottom-right: checkboxes + status ────────────────────────
+        
         self.yes_no_frame = tk.Frame(self.root, bg=bg)
         self.yes_no_frame.place(relx=1.0, rely=1.0, anchor="se", x=-2, y=-2)
 
-        self.please_wait_label = tk.Label(self.yes_no_frame, text="", font="6", bg=bg, fg=fg)
+        self.please_wait_label = tk.Label(self.yes_no_frame, text="", font=("Arial", 8),
+                                          bg=bg, fg=fg, wraplength=180, justify="right")
         self.please_wait_label.grid(row=0)
+
+        self.label_game_count = tk.Label(
+            self.yes_no_frame, text=self._games_found_text(),
+            font=("Arial", 8), bg=bg, fg=fg, justify="right")
+        self.label_game_count.grid(row=1, sticky="e", pady=(0, 4))
 
         self.include_uninstalled_var = tk.BooleanVar(value=False)
         self.include_uninstalled_checkbox = tk.Checkbutton(
             self.yes_no_frame, text="Include Uninstalled Games",
             variable=self.include_uninstalled_var, command=self.toggle_uninstalled_games,
             bg=bg, fg=fg, selectcolor=bg)
-        self.include_uninstalled_checkbox.grid(sticky="w", row=1)
+        self.include_uninstalled_checkbox.grid(sticky="w", row=2)
 
         self.filter_achievements_var = tk.BooleanVar(value=False)
         self.filter_achievements_checkbox = tk.Checkbutton(
             self.yes_no_frame, text="Exclude 100% Achieved Games",
             variable=self.filter_achievements_var, command=self.toggle_achievement_filter,
             bg=bg, fg=fg, selectcolor=bg)
-        self.filter_achievements_checkbox.grid(sticky="w", row=2)
+        self.filter_achievements_checkbox.grid(sticky="w", row=3)
 
         self.set_light_mode()
 
     # ------------------------------------------------------------------
     # Image pre-loading
     # ------------------------------------------------------------------
+    def _fetch_icon_hashes(self):
+        """Silently fetch img_icon_url for installed games from the Steam API
+        and merge them into self.installed_games so the Exclude popup can show icons
+        even when uninstalled games haven't been loaded."""
+        api_key = self.api_key
+        user_id = self._load_text_file("steamuserid.txt")
+        if not api_key or not user_id:
+            return  # not configured yet — skip silently
+
+        try:
+            all_games = get_all_games(api_key, user_id)
+        except Exception as e:
+            print(f"Could not fetch icon hashes: {e}")
+            return
+
+        if not all_games:
+            return
+
+        # Build a lookup: appid (str) → img_icon_url
+        hash_map = {
+            str(g["appid"]): g.get("img_icon_url", "")
+            for g in all_games
+            if "appid" in g and g.get("img_icon_url")
+        }
+
+        # Merge into installed_games in-place (thread-safe: only writing new keys)
+        for game in self.installed_games:
+            app_id = str(game["app_id"])
+            if app_id in hash_map and not game.get("img_icon_url"):
+                game["img_icon_url"] = hash_map[app_id]
+
+        print(f"Icon hashes merged for {len(hash_map)} games.")
+
     def _preload_installed_images(self):
         """Background worker: fetch header images for all installed games."""
         def _load(game):
@@ -532,14 +741,44 @@ class SteamRouletteGUI:
         self.is_images_preloaded = True
         print("Installed-game images pre-loaded.")
 
-    def load_images_in_parallel(self, batch_size: int = 10):
-        """Load images for uninstalled games in batches (runs in a background thread)."""
+    def load_images_in_parallel(self, pw: "ProgressWindow | None" = None):
+        """Download images for uninstalled games with a progress window."""
         games = list(self.uninstalled_games)
-        for i in range(0, len(games), batch_size):
-            batch = games[i:i + batch_size]
-            with ThreadPoolExecutor(max_workers=5) as ex:
-                ex.map(lambda g: fetch_header_image(g["app_id"], self.cache_dir), batch)
-        self.root.after(0, self.on_images_preloaded)
+        total = len(games)
+        completed = 0
+        lock = threading.Lock()
+
+        # If no window was passed in (e.g. called standalone), create a fresh one
+        if pw is None:
+            pw_holder = [None]
+            def _open_pw():
+                pw_holder[0] = ProgressWindow(self.root, "Downloading Images", total)
+            self.root.after(0, _open_pw)
+            import time as _time; _time.sleep(0.05)
+        else:
+            pw_holder = [pw]
+
+        def _load_one(game):
+            nonlocal completed
+            fetch_header_image(game["app_id"], self.cache_dir)
+            with lock:
+                completed += 1
+                c = completed
+            def _upd(c=c):
+                self.please_wait_label.config(text=f"Downloading… {c}/{total}")
+                if pw_holder[0]:
+                    pw_holder[0].update(c, f"Downloading images… {c} of {total}")
+            self.root.after(0, _upd)
+
+        with ThreadPoolExecutor(max_workers=PRELOAD_WORKERS) as ex:
+            ex.map(_load_one, games)
+
+        def _finish():
+            if pw_holder[0]:
+                pw_holder[0].close()
+            self.on_images_preloaded()
+
+        self.root.after(0, _finish)
 
     def on_images_preloaded(self):
         self.is_images_preloaded = True
@@ -548,7 +787,6 @@ class SteamRouletteGUI:
         self.filter_achievements_checkbox.config(state=tk.NORMAL)
         self.please_wait_label.config(text="")
         print("Uninstalled-game images loaded and cached.")
-
     # ------------------------------------------------------------------
     # Text helpers
     # ------------------------------------------------------------------
@@ -596,7 +834,7 @@ class SteamRouletteGUI:
         """Verify a Steam ID via the Web API and return it (or None on failure)."""
         url = "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/"
         try:
-            resp = requests.get(url, params={"key": api_key, "steamids": steam_id}, timeout=10)
+            resp = _session.get(url, params={"key": api_key, "steamids": steam_id}, timeout=10)
             resp.raise_for_status()
             data = resp.json()
             players = data.get("response", {}).get("players", [])
@@ -675,10 +913,16 @@ class SteamRouletteGUI:
             self.button_spin.config(state=tk.DISABLED, text="Loading...")
             self.include_uninstalled_checkbox.config(state=tk.DISABLED)
             self.filter_achievements_checkbox.config(state=tk.DISABLED)
-            self.please_wait_label.config(text="Please Wait…")
 
-            # Run network call in a background thread to keep the UI responsive
-            threading.Thread(target=self._fetch_uninstalled_in_background, daemon=True).start()
+            # Open progress window on the main thread before handing off to background
+            pw = ProgressWindow(self.root, "Including Uninstalled Games", total=0,
+                                bg=self.dark_mode_bg if self.is_dark_mode else self.light_mode_bg,
+                                fg=self.dark_mode_fg if self.is_dark_mode else self.light_mode_fg)
+            pw.set_text("Fetching game list from Steam…")
+
+            threading.Thread(
+                target=self._fetch_uninstalled_in_background,
+                args=(pw,), daemon=True).start()
         else:
             if self.uninstalled_games:
                 uninstalled_ids = {g["app_id"] for g in self.uninstalled_games}
@@ -688,40 +932,58 @@ class SteamRouletteGUI:
                 messagebox.showinfo("Uninstalled Games Removed",
                                     "Uninstalled games removed from the spin pool.")
 
-    def _fetch_uninstalled_in_background(self):
+    def _fetch_uninstalled_in_background(self, pw: "ProgressWindow"):
         user_id = self.load_user_id_key()
         if not user_id:
+            self.root.after(0, pw.close)
             self.root.after(0, lambda: messagebox.showerror(
                 "Error", "Please set your Steam User ID first."))
             self.root.after(0, lambda: self.include_uninstalled_var.set(False))
             self.root.after(0, self.enable_checkbox)
             return
 
+        # Stage 1: fetch full game list (indeterminate — unknown duration)
+        self.root.after(0, lambda: pw.set_text("Fetching your Steam library…"))
         all_games = get_all_games(self.api_key, user_id)
         if not all_games:
+            self.root.after(0, pw.close)
             self.root.after(0, lambda: messagebox.showerror(
                 "Error", "No games were fetched from the Steam API."))
             self.root.after(0, lambda: self.include_uninstalled_var.set(False))
             self.root.after(0, self.enable_checkbox)
             return
 
-        installed_ids = {g["app_id"] for g in self.installed_games}
+        # Stage 2: filter to uninstalled only (instant, but update label)
+        self.root.after(0, lambda: pw.set_text("Filtering uninstalled games…"))
+        installed_ids = {str(g["app_id"]) for g in self.installed_games}
         new_uninstalled = [
-            {**g, "app_id": str(g["appid"])}
+            {
+                "app_id": str(g["appid"]),
+                "name": (g.get("name") or f"App {g['appid']}").strip(),
+                "img_icon_url": g.get("img_icon_url", ""),
+            }
             for g in all_games
-            if "appid" in g and str(g["appid"]) not in installed_ids
+            if "appid" in g
+            and str(g["appid"]) not in installed_ids
+            and str(g["appid"]) not in NON_GAME_APP_IDS
         ]
 
         def _apply():
             if new_uninstalled:
                 self.uninstalled_games = new_uninstalled
                 self.installed_games.extend(new_uninstalled)
+                # Stage 3: hand the progress window to the image loader
+                pw.switch_to_determinate(len(new_uninstalled),
+                                         f"Downloading images… 0 of {len(new_uninstalled)}")
                 if self.filter_achievements_var.get():
                     self.exclude_achievement_games()
-                threading.Thread(target=self.load_images_in_parallel, daemon=True).start()
+                threading.Thread(
+                    target=self.load_images_in_parallel,
+                    args=(pw,), daemon=True).start()
                 messagebox.showinfo("Uninstalled Games Added",
                                     f"Added {len(new_uninstalled)} uninstalled games.")
             else:
+                pw.close()
                 messagebox.showinfo("No Uninstalled Games",
                                     "No uninstalled games found to include.")
                 self.enable_checkbox()
@@ -741,7 +1003,6 @@ class SteamRouletteGUI:
             threading.Thread(target=self._exclude_achievements_bg, daemon=True).start()
         else:
             threading.Thread(target=self._include_achievements_bg, daemon=True).start()
-
     def _exclude_achievements_bg(self):
         self.exclude_achievement_games()
         self.root.after(0, lambda: self.excluded_label.config(
@@ -757,16 +1018,51 @@ class SteamRouletteGUI:
         self.root.after(0, self.enable_checkbox)
 
     def exclude_achievement_games(self):
-        all_lists = self.installed_games + self.uninstalled_games
-        for game in all_lists:
-            app_id = game["app_id"]
-            if not self.supports_achievements(app_id):
-                continue
-            progress = self.get_achievement_progress(app_id)
-            total = progress["total"]
-            if total > 0 and progress["unlocked"] == total:
-                if app_id not in self.excluded_games:
-                    self.excluded_games.append(app_id)
+        all_games = list({g["app_id"]: g for g in
+                          self.installed_games + self.uninstalled_games}.values())
+        total = len(all_games)
+        completed = 0
+        lock = threading.Lock()
+
+        pw_holder = [None]
+
+        def _open_pw():
+            pw_holder[0] = ProgressWindow(self.root, "Checking Achievements", total,
+                                          bg=self.dark_mode_bg if self.is_dark_mode else self.light_mode_bg,
+                                          fg=self.dark_mode_fg if self.is_dark_mode else self.light_mode_fg)
+
+        self.root.after(0, _open_pw)
+        import time as _time; _time.sleep(0.05)
+
+        def _check(game):
+            nonlocal completed
+            app_id = str(game["app_id"])
+            try:
+                if not self.supports_achievements(app_id):
+                    return
+                progress = self.get_achievement_progress(app_id)
+                if progress["total"] > 0 and progress["unlocked"] == progress["total"]:
+                    with lock:
+                        if app_id not in self.excluded_games:
+                            self.excluded_games.append(app_id)
+            finally:
+                with lock:
+                    completed += 1
+                    c = completed
+                def _upd(c=c):
+                    self.please_wait_label.config(text=f"Checking… {c}/{total}")
+                    if pw_holder[0]:
+                        pw_holder[0].update(c, f"Checking achievements… {c} of {total}")
+                self.root.after(0, _upd)
+
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            ex.map(_check, all_games)
+
+        def _finish():
+            if pw_holder[0]:
+                pw_holder[0].close()
+
+        self.root.after(0, _finish)
 
     def include_achievement_games(self):
         """Remove 100%-complete achievement games from the excluded list."""
@@ -779,22 +1075,35 @@ class SteamRouletteGUI:
         for app_id in to_remove:
             self.excluded_games.remove(app_id)
 
+    # Cache schema lookups so each app_id is only queried once per session
+    _achievement_schema_cache: dict = {}
+    _achievement_progress_cache: dict = {}
+
     def supports_achievements(self, app_id: str) -> bool:
+        if app_id in self._achievement_schema_cache:
+            return self._achievement_schema_cache[app_id]
         url = "https://api.steampowered.com/ISteamUserStats/GetSchemaForGame/v2/"
         try:
-            resp = requests.get(url, params={"key": self.api_key, "appid": app_id}, timeout=10)
+            resp = _session.get(url, params={"key": self.api_key, "appid": app_id}, timeout=10)
+            if resp.status_code in (400, 403):
+                self._achievement_schema_cache[app_id] = False
+                return False
             resp.raise_for_status()
             data = resp.json()
-            return (
+            result = (
                 "game" in data
                 and "availableGameStats" in data["game"]
                 and "achievements" in data["game"]["availableGameStats"]
             )
         except Exception as e:
             print(f"Error checking achievements schema for {app_id}: {e}")
-            return False
+            result = False
+        self._achievement_schema_cache[app_id] = result
+        return result
 
     def get_achievement_progress(self, app_id: str) -> dict:
+        if app_id in self._achievement_progress_cache:
+            return self._achievement_progress_cache[app_id]
         if not self.supports_achievements(app_id):
             return {"total": 0, "unlocked": 0}
         url = "https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/"
@@ -803,21 +1112,26 @@ class SteamRouletteGUI:
             "steamid": self.load_user_id_key(),
             "appid": app_id,
         }
+        result = {"total": 0, "unlocked": 0}
         try:
-            resp = requests.get(url, params=params, timeout=10)
-            resp.raise_for_status()
-            data = resp.json()
-            if "playerstats" in data and "achievements" in data["playerstats"]:
-                achievements = data["playerstats"]["achievements"]
-                return {
-                    "total": len(achievements),
-                    "unlocked": sum(a["achieved"] for a in achievements),
-                }
+            resp = _session.get(url, params=params, timeout=10)
+            if resp.status_code in (400, 403):
+                print(f"Skipping achievements for {app_id}: stats not accessible (HTTP {resp.status_code}).")
+            else:
+                resp.raise_for_status()
+                data = resp.json()
+                if "playerstats" in data and "achievements" in data["playerstats"]:
+                    achievements = data["playerstats"]["achievements"]
+                    result = {
+                        "total": len(achievements),
+                        "unlocked": sum(a["achieved"] for a in achievements),
+                    }
         except requests.exceptions.HTTPError as e:
             print(f"HTTP error fetching achievements for {app_id}: {e}")
         except Exception as e:
             print(f"Error fetching achievements for {app_id}: {e}")
-        return {"total": 0, "unlocked": 0}
+        self._achievement_progress_cache[app_id] = result
+        return result
 
     def enable_checkbox(self):
         self.include_uninstalled_checkbox.config(state=tk.NORMAL)
@@ -828,6 +1142,20 @@ class SteamRouletteGUI:
     # ------------------------------------------------------------------
     # Exclusion management
     # ------------------------------------------------------------------
+    def clear_image_cache(self):
+        """Delete all cached images so they are re-fetched on next use."""
+        count = 0
+        for f in os.listdir(self.cache_dir):
+            if f.endswith(".jpg"):
+                try:
+                    os.remove(os.path.join(self.cache_dir, f))
+                    count += 1
+                except OSError as e:
+                    print(f"Could not delete {f}: {e}")
+        with _image_lock:
+            self.preloaded_images.clear()
+        messagebox.showinfo("Cache Cleared", f"Deleted {count} cached image(s). They will be re-downloaded as needed.")
+
     def load_exclusions(self):
         path = _data_path("excluded_games.json")
         if os.path.exists(path):
@@ -856,77 +1184,272 @@ class SteamRouletteGUI:
         self.exclude_games()
 
     def exclude_games(self):
-        """Open (or raise) the game-exclusion popup."""
+        """Open (or raise) the game-exclusion popup using a canvas virtual list."""
         if hasattr(self, "exclude_popup") and self.exclude_popup.winfo_exists():
             self.exclude_popup.lift()
             return
 
         bg = self.dark_mode_bg if self.is_dark_mode else self.light_mode_bg
         fg = self.dark_mode_fg if self.is_dark_mode else self.light_mode_fg
+        check_bg  = "#4a90d9"   # tick colour
+        hover_bg  = "#3a3a5a" if self.is_dark_mode else "#e8eaf6"
+        ROW_H     = 28          # px per row
+        ICON_SIZE = 20
+        ICON_X    = 6           # left edge of icon
+        CHECK_X   = 32          # left edge of checkbox square
+        TEXT_X    = 54          # left edge of game name text
 
         self.exclude_popup = tk.Toplevel(self.root)
         self.exclude_popup.title("Exclude Games")
         ws, hs = self.exclude_popup.winfo_screenwidth(), self.exclude_popup.winfo_screenheight()
-        self.exclude_popup.geometry(f"600x500+{int(ws/24 - 25)}+{int(hs/3 - 167)}")
-        self.exclude_popup.resizable(False, False)
+        self.exclude_popup.geometry(f"640x560+{int(ws/24 - 25)}+{int(hs/3 - 167)}")
+        self.exclude_popup.resizable(True, True)
         self.update_theme(self.exclude_popup, bg, fg)
 
-        # Search bar
-        tk.Label(self.exclude_popup, text="Search:", bg=bg, fg=fg, font=12).pack(pady=2)
+        # ── Top bar ──────────────────────────────────────────────────
+        top_bar = tk.Frame(self.exclude_popup, bg=bg)
+        top_bar.pack(fill="x", padx=8, pady=(8, 2))
+        tk.Label(top_bar, text="Search:", bg=bg, fg=fg,
+                 font=("Arial", 10)).pack(side="left", padx=(0, 4))
         search_var = tk.StringVar()
-        search_entry = tk.Entry(self.exclude_popup, textvariable=search_var, bg=bg, fg=fg, font=12)
-        search_entry.pack(pady=6, padx=2)
+        tk.Entry(top_bar, textvariable=search_var, bg=bg, fg=fg,
+                 font=("Arial", 10), width=28).pack(side="left", padx=(0, 4))
+        tk.Button(top_bar, text="Search", bg=bg, fg=fg, font=("Arial", 10),
+                  command=lambda: _repaint(search_var.get().lower())).pack(side="left")
 
-        # Scrollable canvas
-        list_canvas = tk.Canvas(self.exclude_popup, bg=bg, bd=0, highlightthickness=0)
-        scrollable_frame = tk.Frame(list_canvas, bg=bg)
-        scrollbar = tk.Scrollbar(self.exclude_popup, orient="vertical", command=list_canvas.yview)
-        list_canvas.configure(yscrollcommand=scrollbar.set)
-
-        # Bind scroll only to this canvas (not globally)
-        list_canvas.bind("<Enter>",
-                         lambda _: list_canvas.bind_all("<MouseWheel>", self._on_mousewheel(list_canvas)))
-        list_canvas.bind("<Leave>",
-                         lambda _: list_canvas.unbind_all("<MouseWheel>"))
-
-        scrollbar.pack(side="right", fill="y")
-        list_canvas.pack(side="left", fill="both", expand=True, padx=4)
-        list_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        scrollable_frame.bind("<Configure>",
-                              lambda e: list_canvas.configure(scrollregion=list_canvas.bbox("all")))
-
-        sorted_games = sorted(self.installed_games, key=lambda g: g["name"].lower())
-        self.game_vars: dict = {}
-
-        def _populate(filter_text: str = ""):
-            for widget in scrollable_frame.winfo_children():
-                widget.destroy()
-            for game in sorted_games:
-                if filter_text and filter_text not in game["name"].lower():
-                    continue
-                app_id = game["app_id"]
-                var = tk.BooleanVar(value=(app_id in self.excluded_games))
-                self.game_vars[app_id] = var
-                tk.Checkbutton(
-                    scrollable_frame, text=game["name"], variable=var,
-                    bg=bg, fg=fg, selectcolor=bg, font=12,
-                ).pack(anchor="w")
-
-        _populate()
-        search_var.trace_add("write", lambda *_: _populate(search_var.get().lower()))
-
-        def _apply():
-            self.excluded_games = [aid for aid, v in self.game_vars.items() if v.get()]
-            self.excluded_label.config(text=f"Excluded Games:\n{len(self.excluded_games)}")
-            self.save_exclusions()
-            messagebox.showinfo("Exclusions Applied", f"Excluded {len(self.excluded_games)} games.")
+        # Window icon
+        try:
+            if os.path.exists(ICON_PATH):
+                self.exclude_popup.iconbitmap(ICON_PATH)
+        except Exception as e:
+            print(f"Error setting window icon: {e}")
 
         btn_row = tk.Frame(self.exclude_popup, bg=bg)
-        btn_row.pack(pady=4)
+        btn_row.pack(fill="x", padx=8, pady=(2, 4))
+
+        def _apply():
+            self.excluded_games = [aid for aid, checked in checked_state.items() if checked]
+            self.excluded_label.config(text=f"Excluded Games:\n{len(self.excluded_games)}")
+            self.save_exclusions()
+            messagebox.showinfo("Exclusions Applied",
+                                f"Excluded {len(self.excluded_games)} games.")
+
         tk.Button(btn_row, text="Apply", command=_apply,
-                  bg=bg, fg=fg, font=12).pack(side="left", padx=4)
+                  bg=bg, fg=fg, font=("Arial", 10)).pack(side="left", padx=(0, 4))
+        tk.Button(btn_row, text="Refresh List",
+                  command=lambda: _repaint(search_var.get().lower()),
+                  bg=bg, fg=fg, font=("Arial", 10)).pack(side="left", padx=(0, 4))
         tk.Button(btn_row, text="Clear All", command=self.clear_exclusions,
-                  bg=bg, fg=fg, font=12).pack(side="left", padx=4)
+                  bg=bg, fg=fg, font=("Arial", 10)).pack(side="left")
+
+        # ── Canvas list ──────────────────────────────────────────────
+        list_frame = tk.Frame(self.exclude_popup, bg=bg)
+        list_frame.pack(fill="both", expand=True, padx=4, pady=(0, 4))
+
+        c = tk.Canvas(list_frame, bg=bg, bd=0, highlightthickness=0)
+        vsb = tk.Scrollbar(list_frame, orient="vertical", command=c.yview)
+        c.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        c.pack(side="left", fill="both", expand=True)
+
+        c.bind("<Enter>",  lambda _: c.bind_all("<MouseWheel>",
+                           lambda e: c.yview_scroll(int(-1*(e.delta/120)), "units")))
+        c.bind("<Leave>",  lambda _: c.unbind_all("<MouseWheel>"))
+
+        # ── State ────────────────────────────────────────────────────
+        # checked_state: app_id → bool (persists across repaints)
+        checked_state: dict = {str(g["app_id"]): (str(g["app_id"]) in self.excluded_games)
+                               for g in self.installed_games}
+        # icon cache: app_id → PhotoImage (kept alive here)
+        icon_cache: dict = {}
+        cancel_token = [0]
+        current_filtered: list = []   # games currently shown
+
+        def _all_games_sorted():
+            return sorted(
+                [g for g in self.installed_games if str(g.get("name", "")).strip()],
+                key=lambda g: g["name"].lower()
+            )
+
+        def _draw_row(idx: int, game: dict, width: int):
+            """Draw a single row at vertical position idx*ROW_H."""
+            app_id = str(game["app_id"])
+            y      = idx * ROW_H
+            name   = str(game.get("name", "")).strip()
+            is_checked = checked_state.get(app_id, False)
+
+            # Row background (highlight on hover handled separately)
+            c.create_rectangle(0, y, width, y + ROW_H,
+                               fill=bg, outline="", tags=(f"row_{idx}", "row_bg"))
+
+            # Icon placeholder — replaced when icon loads
+            c.create_rectangle(ICON_X, y + 4, ICON_X + ICON_SIZE, y + 4 + ICON_SIZE,
+                               fill=bg, outline="", tags=(f"icon_ph_{app_id}",))
+            if app_id in icon_cache:
+                c.create_image(ICON_X, y + 4, image=icon_cache[app_id],
+                               anchor="nw", tags=(f"icon_{app_id}",))
+
+            # Checkbox square
+            cb_y1, cb_y2 = y + 6, y + ROW_H - 6
+            cb_x1, cb_x2 = CHECK_X, CHECK_X + (cb_y2 - cb_y1)
+            c.create_rectangle(cb_x1, cb_y1, cb_x2, cb_y2,
+                               outline=fg, fill=check_bg if is_checked else bg,
+                               tags=(f"cb_{app_id}", "checkbox"))
+            if is_checked:
+                # Draw a tick
+                mid_x = (cb_x1 + cb_x2) // 2
+                c.create_line(cb_x1+2, cb_y1+(cb_y2-cb_y1)//2,
+                              mid_x-1, cb_y2-2,
+                              cb_x2-1, cb_y1+2,
+                              fill="white", width=2, tags=(f"tick_{app_id}", "tick"))
+
+            # Game name
+            c.create_text(TEXT_X, y + ROW_H // 2, text=name, anchor="w",
+                          fill=fg, font=("Arial", 10), tags=(f"text_{app_id}",))
+
+        def _repaint(filter_text: str = ""):
+            cancel_token[0] += 1
+            my_token = cancel_token[0]
+            c.delete("all")
+            current_filtered.clear()
+
+            games = _all_games_sorted()
+            if filter_text:
+                games = [g for g in games if filter_text in g["name"].lower()]
+            current_filtered.extend(games)
+
+            # Ensure checked_state has entries for every game
+            for g in games:
+                aid = str(g["app_id"])
+                if aid not in checked_state:
+                    checked_state[aid] = aid in self.excluded_games
+
+            width = c.winfo_width() or 620
+            total_h = len(games) * ROW_H
+            c.configure(scrollregion=(0, 0, width, total_h))
+
+            for idx, game in enumerate(games):
+                _draw_row(idx, game, width)
+
+            # Load missing icons — capsule URL works for any game using just app_id
+            missing = [g for g in games
+                       if str(g["app_id"]) not in icon_cache]
+
+            def _load_icons():
+                if not missing:
+                    return
+                total_missing = len(missing)
+                result_queue: queue.Queue = queue.Queue()
+                lock = threading.Lock()
+                fetched = [0]
+
+                def _fetch_one(game):
+                    if cancel_token[0] != my_token:
+                        return
+                    app_id = str(game["app_id"])
+                    icon_hash = game.get("img_icon_url", "")
+                    pil_img = fetch_game_icon(
+                        app_id, icon_hash, self.cache_dir, size=ICON_SIZE)
+                    with lock:
+                        fetched[0] += 1
+                    if cancel_token[0] == my_token:
+                        result_queue.put((app_id, pil_img, fetched[0]))
+
+                # Fetch all icons in background threads
+                fetch_thread = threading.Thread(
+                    target=lambda: ThreadPoolExecutor(
+                        max_workers=PRELOAD_WORKERS).__enter__().map(
+                            _fetch_one, missing),
+                    daemon=True)
+                fetch_thread.start()
+
+                # Drain the queue one item per after() tick so user events
+                # always have priority between injections
+                def _drain():
+                    if cancel_token[0] != my_token:
+                        return
+                    try:
+                        app_id, pil_img, n = result_queue.get_nowait()
+                        if pil_img:
+                            try:
+                                photo = ImageTk.PhotoImage(pil_img)
+                                icon_cache[app_id] = photo
+                                for i, g in enumerate(current_filtered):
+                                    if str(g["app_id"]) == app_id:
+                                        y = i * ROW_H
+                                        c.delete(f"icon_ph_{app_id}")
+                                        c.delete(f"icon_{app_id}")
+                                        c.create_image(ICON_X, y + 4,
+                                                       image=photo, anchor="nw",
+                                                       tags=(f"icon_{app_id}",))
+                                        break
+                            except tk.TclError:
+                                pass
+                    except queue.Empty:
+                        pass  # nothing ready yet — come back next tick
+
+                    # Keep draining until all fetches are done and queue is empty
+                    if fetch_thread.is_alive() or not result_queue.empty():
+                        c.after(20, _drain)  # 20 ms gap = ~50 injects/sec max
+
+                c.after(20, _drain)
+
+            _load_icons()
+
+        def _toggle(app_id: str):
+            checked_state[app_id] = not checked_state.get(app_id, False)
+            # Redraw just the checkbox and tick for this game
+            c.delete(f"cb_{app_id}")
+            c.delete(f"tick_{app_id}")
+            for i, g in enumerate(current_filtered):
+                if str(g["app_id"]) == app_id:
+                    y = i * ROW_H
+                    is_checked = checked_state[app_id]
+                    cb_y1, cb_y2 = y + 6, y + ROW_H - 6
+                    cb_x1, cb_x2 = CHECK_X, CHECK_X + (cb_y2 - cb_y1)
+                    c.create_rectangle(cb_x1, cb_y1, cb_x2, cb_y2,
+                                       outline=fg,
+                                       fill=check_bg if is_checked else bg,
+                                       tags=(f"cb_{app_id}", "checkbox"))
+                    if is_checked:
+                        mid_x = (cb_x1 + cb_x2) // 2
+                        c.create_line(cb_x1+2, cb_y1+(cb_y2-cb_y1)//2,
+                                      mid_x-1, cb_y2-2,
+                                      cb_x2-1, cb_y1+2,
+                                      fill="white", width=2,
+                                      tags=(f"tick_{app_id}", "tick"))
+                    break
+
+        def _on_click(event):
+            # Convert canvas y (accounting for scroll) to row index
+            cy = c.canvasy(event.y)
+            idx = int(cy // ROW_H)
+            if 0 <= idx < len(current_filtered):
+                _toggle(str(current_filtered[idx]["app_id"]))
+
+        def _on_hover(event):
+            cy = c.canvasy(event.y)
+            idx = int(cy // ROW_H)
+            c.delete("hover_highlight")
+            if 0 <= idx < len(current_filtered):
+                y = idx * ROW_H
+                w = c.winfo_width()
+                c.create_rectangle(0, y, w, y + ROW_H,
+                                   fill=hover_bg, outline="",
+                                   tags="hover_highlight")
+                c.tag_lower("hover_highlight")   # keep behind text/icons
+
+        c.bind("<Button-1>", _on_click)
+        c.bind("<Motion>",   _on_hover)
+        c.bind("<Leave>",    lambda _: c.delete("hover_highlight"))
+
+        # Initial draw — wait one frame so canvas has its real width
+        self.exclude_popup.after(10, lambda: _repaint(search_var.get().lower()))
+        search_var.trace_add("write", lambda *_: _repaint(search_var.get().lower()))
+        self.exclude_popup.protocol(
+            "WM_DELETE_WINDOW",
+            lambda: (cancel_token.__setitem__(0, cancel_token[0] + 1),
+                     self.exclude_popup.destroy()))
 
     @staticmethod
     def _on_mousewheel(canvas: tk.Canvas):
