@@ -45,6 +45,6 @@ To get your Steam API Key, visit https://steamcommunity.com/dev/apikey and login
 
 # Virus Scan
 
-https://www.virustotal.com/gui/file/6a9d2c759fed98b6d885036ccd4cfe7fe7510d997bc41aa764d5f88ade0ae29e/detection
+https://www.virustotal.com/gui/file/f12f47273cb672a6f69022c9c5ed712420c36cc3c7c6ff1a73d15588ac385b9c/detection
 
 The release version does seem to flag up as a Trojan according to a few antivirus software, but rest assured that this application is safe, and all the source code is visible in this repo, so consider them nothing more than false positives.
