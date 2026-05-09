@@ -36,11 +36,11 @@ To get your Steam API Key, visit https://steamcommunity.com/dev/apikey and login
 - Preloads Steam game header images to a cache so you won't have to fetch them through the Steam API each time.
 - Feature to now include games you own that are not installed in the spin list
 - Exclude games/items you don't want to be included in the spin
+- Log window to see for any errors downloading Game images/icons
 
-<img width="602" height="782" alt="image" src="https://github.com/user-attachments/assets/739a7700-5aae-4a15-8d18-bfbe1ef66a73" />
+<img width="602" height="782" alt="image" src="https://github.com/user-attachments/assets/e32c25be-9fa6-47f3-92ee-22af2de56971" />
 
 # To-Do
-- Fix freezing issue when dealing with game librarys that are very big
 - Fix issue where some games images on the wheel are unavailable
 
 # Virus Scan
